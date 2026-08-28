@@ -103,6 +103,34 @@ npm start
 - `GET /` - Health check / Engine status
 - `POST /api/v1/generate` - Generate simulated AI completion & record token usage (Requires `Idempotency-Key` header)
 - `GET /api/v1/usage` - Get current billing period usage summary, plan limits, and remaining quotas
+- `POST /api/v1/subscription/checkout` - Simulated zero-cost plan checkout (Free / Pro)
+
+### Example Request (`POST /api/v1/subscription/checkout`)
+
+```bash
+curl -X POST http://localhost:3000/api/v1/subscription/checkout \
+  -H "Content-Type: application/json" \
+  -d '{
+    "plan_name": "Pro"
+  }'
+```
+
+### Example Response (`200 OK`)
+
+```json
+{
+  "success": true,
+  "checkout": {
+    "provider": "fake",
+    "session_id": "fake_checkout_8a2b3c4d5e6f7a8b",
+    "subscription_id": "fake_sub_1a2b3c4d5e6f7a8b",
+    "plan": "Pro",
+    "status": "active"
+  }
+}
+```
+
+> **Simulated Zero-Cost Checkout Note:** This checkout operation uses the local fake payment provider (`PAYMENT_PROVIDER=fake`), costs ₹0, and requires no card or payment gateway credentials.
 
 ### Example Request (`POST /api/v1/generate`)
 
