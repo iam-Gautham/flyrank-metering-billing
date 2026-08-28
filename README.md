@@ -95,6 +95,7 @@ npm start
 
 - `GET /` - Health check / Engine status
 - `POST /api/v1/generate` - Generate simulated AI completion & record token usage (Requires `Idempotency-Key` header)
+- `GET /api/v1/usage` - Get current billing period usage summary, plan limits, and remaining quotas
 
 ### Example Request (`POST /api/v1/generate`)
 
@@ -124,6 +125,42 @@ curl -X POST http://localhost:3000/api/v1/generate \
     "output_tokens": 50,
     "reasoning_tokens": 10,
     "total_tokens": 180
+  }
+}
+```
+
+### Example Request (`GET /api/v1/usage`)
+
+```bash
+curl http://localhost:3000/api/v1/usage
+```
+
+### Example Usage Response (`200 OK`)
+
+```json
+{
+  "tenant": {
+    "id": "32e8849a-6f0a-4639-9c57-30da0f98ca6f",
+    "name": "Demo Tenant"
+  },
+  "plan": {
+    "name": "Free"
+  },
+  "period": {
+    "start": "2026-08-01T00:00:00.000Z",
+    "end": "2026-08-31T23:59:59.999Z"
+  },
+  "usage": {
+    "api_calls": {
+      "used": 1,
+      "limit": 1000,
+      "remaining": 999
+    },
+    "ai_tokens": {
+      "used": 180,
+      "limit": 100000,
+      "remaining": 99820
+    }
   }
 }
 ```
