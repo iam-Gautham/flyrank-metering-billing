@@ -26,6 +26,16 @@ async function getOrCreateActiveSubscription(tenantId, dbClient = db, forUpdate 
     return subResult.rows[0];
   }
 
+  // If locking is requested, lock the tenant row to serialize concurrent default subscription creation
+  if (forUpdate) {
+    await dbClient.query('SELECT id FROM tenants WHERE id = $1 FOR UPDATE', [tenantId]);
+    // Re-check if another concurrent transaction inserted the subscription while waiting
+    const recheckResult = await dbClient.query(selectQuery, [tenantId]);
+    if (recheckResult.rows.length > 0) {
+      return recheckResult.rows[0];
+    }
+  }
+
   // 2. If no active subscription exists, fetch the Free plan
   const planResult = await dbClient.query("SELECT * FROM plans WHERE name = 'Free' LIMIT 1");
   if (planResult.rows.length === 0) {
