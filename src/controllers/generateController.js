@@ -1,5 +1,6 @@
 const { getDemoTenant } = require('../services/tenantService');
-const { findUsageEvent, recordUsageEvent } = require('../services/usageService');
+const { findUsageEvent } = require('../services/usageService');
+const { QuotaExceededError, checkAndRecordUsageTransaction } = require('../services/quotaService');
 
 /**
  * Validates that a value is a non-negative integer.
@@ -41,7 +42,7 @@ async function handleGenerate(req, res, next) {
     // 3. Fetch Demo Tenant
     const tenant = await getDemoTenant();
 
-    // 4. Check application-level idempotency
+    // 4. Check application-level idempotency FIRST before quota check
     const existingEvent = await findUsageEvent(tenant.id, idempotencyKey);
     if (existingEvent) {
       return res.status(200).json({
@@ -62,8 +63,8 @@ async function handleGenerate(req, res, next) {
     // 5. Calculate total tokens
     const total_tokens = input_tokens + cached_tokens + output_tokens + reasoning_tokens;
 
-    // 6. Record usage event (handles DB unique constraint conflict safely)
-    const event = await recordUsageEvent({
+    // 6. Check quotas & record usage event safely inside database transaction
+    const event = await checkAndRecordUsageTransaction({
       tenantId: tenant.id,
       idempotencyKey,
       usageType: 'AI_TOKENS',
@@ -90,6 +91,13 @@ async function handleGenerate(req, res, next) {
       },
     });
   } catch (error) {
+    if (error instanceof QuotaExceededError) {
+      return res.status(429).json({
+        error: 'Too Many Requests',
+        quota_type: error.quotaType,
+        message: error.message,
+      });
+    }
     return next(error);
   }
 }

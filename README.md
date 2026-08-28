@@ -119,3 +119,13 @@ curl -X POST http://localhost:3000/api/v1/generate \
   }
 }
 ```
+
+### Quota Exceeded Response (`429 Too Many Requests`)
+
+```json
+{
+  "error": "Too Many Requests",
+  "quota_type": "API_CALLS",
+  "message": "Monthly API call limit exceeded. Limit: 1000, Current: 1000, Requested: 1."
+}
+```
