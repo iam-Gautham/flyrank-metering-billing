@@ -86,3 +86,35 @@ npm start
 ## API Endpoints
 
 - `GET /` - Health check / Engine status
+- `POST /api/v1/generate` - Generate simulated AI completion & record token usage
+
+### Example Request (`POST /api/v1/generate`)
+
+```bash
+curl -X POST http://localhost:3000/api/v1/generate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input_tokens": 100,
+    "cached_tokens": 20,
+    "output_tokens": 50,
+    "reasoning_tokens": 10
+  }'
+```
+
+### Example Response (`200 OK`)
+
+```json
+{
+  "success": true,
+  "result": {
+    "text": "This is a simulated AI-generated response from FlyRank."
+  },
+  "usage": {
+    "input_tokens": 100,
+    "cached_tokens": 20,
+    "output_tokens": 50,
+    "reasoning_tokens": 10,
+    "total_tokens": 180
+  }
+}
+```
