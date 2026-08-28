@@ -1,4 +1,5 @@
 const express = require('express');
+const db = require('./db');
 const generateRoutes = require('./routes/generateRoutes');
 const usageRoutes = require('./routes/usageRoutes');
 const subscriptionRoutes = require('./routes/subscriptionRoutes');
@@ -6,11 +7,31 @@ const webhookRoutes = require('./routes/webhookRoutes');
 
 const app = express();
 
-app.use(express.json());
+// Enforce 1MB request body payload limit for API security
+app.use(express.json({ limit: '1mb' }));
 
 // Base health check endpoint
 app.get('/', (req, res) => {
   res.json({ message: 'Usage Metering & Billing Engine' });
+});
+
+// Standardized container readiness and health check probe endpoints
+app.get('/health', async (req, res) => {
+  try {
+    await db.query('SELECT 1');
+    return res.status(200).json({ status: 'ok', database: 'connected' });
+  } catch (err) {
+    return res.status(503).json({ status: 'error', database: 'disconnected', message: 'Database connection failed.' });
+  }
+});
+
+app.get('/api/v1/health', async (req, res) => {
+  try {
+    await db.query('SELECT 1');
+    return res.status(200).json({ status: 'ok', database: 'connected' });
+  } catch (err) {
+    return res.status(503).json({ status: 'error', database: 'disconnected', message: 'Database connection failed.' });
+  }
 });
 
 // Mount API v1 routes
@@ -26,6 +47,14 @@ app.use((err, req, res, next) => {
     return res.status(400).json({
       error: 'Bad Request',
       message: 'Invalid JSON payload format.',
+    });
+  }
+
+  // Handle Express 413 Payload Too Large error
+  if (err.type === 'entity.too.large' || err.status === 413) {
+    return res.status(413).json({
+      error: 'Payload Too Large',
+      message: 'Request payload exceeds maximum size limit of 1MB.',
     });
   }
 
@@ -46,6 +75,7 @@ app.use((err, req, res, next) => {
     : statusCode === 404 ? 'Not Found'
     : statusCode === 429 ? 'Too Many Requests'
     : statusCode === 502 ? 'Bad Gateway'
+    : statusCode === 413 ? 'Payload Too Large'
     : 'Internal Server Error';
 
   return res.status(statusCode).json({

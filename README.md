@@ -245,7 +245,20 @@ curl -X POST http://localhost:3000/api/v1/webhooks/payment \
 }
 ```
 
-> **Production Billing Engine Note:** Powered by the local fake payment provider (`PAYMENT_PROVIDER=fake`), this engine costs ₹0, requires no external credentials, and guarantees a complete billing state machine (`active`, `past_due`, `canceled`), payment recovery, renewal period updates, out-of-order event protection, strict tenant-subscription isolation, sanitized internal 500 error responses, and database-schema-enforced single active subscription invariant (`idx_single_active_subscription_per_tenant`).
+> **Production Billing Engine Note:** Powered by the local fake payment provider (`PAYMENT_PROVIDER=fake`), this engine costs ₹0, requires no external credentials, and guarantees a complete billing state machine (`active`, `past_due`, `canceled`), payment recovery, renewal period updates, out-of-order event protection, strict tenant-subscription isolation, sanitized internal 500 error responses, database-schema-enforced single active subscription invariant (`idx_single_active_subscription_per_tenant`), graceful shutdown (`SIGTERM`/`SIGINT`), and standardized container health check probes (`GET /health`).
+
+### Health Check Endpoint (`GET /health`)
+
+```bash
+curl http://localhost:3000/health
+```
+
+```json
+{
+  "status": "ok",
+  "database": "connected"
+}
+```
 
 ### Example Request (`POST /api/v1/generate`)
 
