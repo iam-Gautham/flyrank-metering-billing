@@ -86,13 +86,14 @@ npm start
 ## API Endpoints
 
 - `GET /` - Health check / Engine status
-- `POST /api/v1/generate` - Generate simulated AI completion & record token usage
+- `POST /api/v1/generate` - Generate simulated AI completion & record token usage (Requires `Idempotency-Key` header)
 
 ### Example Request (`POST /api/v1/generate`)
 
 ```bash
 curl -X POST http://localhost:3000/api/v1/generate \
   -H "Content-Type: application/json" \
+  -H "Idempotency-Key: demo-key-12345" \
   -d '{
     "input_tokens": 100,
     "cached_tokens": 20,

@@ -2,7 +2,26 @@ const crypto = require('crypto');
 const db = require('../db');
 
 /**
+ * Find an existing usage event by tenant ID and idempotency key.
+ * 
+ * @param {string} tenantId
+ * @param {string} idempotencyKey
+ * @returns {Promise<Object|null>}
+ */
+async function findUsageEvent(tenantId, idempotencyKey) {
+  const queryText = `
+    SELECT * FROM usage_events 
+    WHERE tenant_id = $1 AND idempotency_key = $2 
+    LIMIT 1
+  `;
+  const result = await db.query(queryText, [tenantId, idempotencyKey]);
+  return result.rows[0] || null;
+}
+
+/**
  * Record a usage event in the database.
+ * If a unique constraint conflict (code 23505) occurs for (tenant_id, idempotency_key),
+ * it returns the existing record safely.
  * 
  * @param {Object} params
  * @param {string} params.tenantId
@@ -53,10 +72,22 @@ async function recordUsageEvent({
     costCents,
   ];
 
-  const result = await db.query(queryText, values);
-  return result.rows[0];
+  try {
+    const result = await db.query(queryText, values);
+    return result.rows[0];
+  } catch (error) {
+    // 23505 is PostgreSQL error code for unique_violation
+    if (error.code === '23505') {
+      const existingRecord = await findUsageEvent(tenantId, idempotencyKey);
+      if (existingRecord) {
+        return existingRecord;
+      }
+    }
+    throw error;
+  }
 }
 
 module.exports = {
+  findUsageEvent,
   recordUsageEvent,
 };
