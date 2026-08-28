@@ -45,7 +45,7 @@ Backend service for FlyRank usage metering and billing infrastructure.
                             +--------------------------------------------------+
 ```
 
-## Security & Authentication Model (Phase 5.4)
+## Security & Authentication Model
 
 ### 1. Authentication Middleware (`authenticateTenant`)
 All protected API endpoints require authenticated tenant context:
@@ -172,78 +172,54 @@ npm test
 
 ## API Endpoints
 
-- `GET /` - Health check / Engine status
+- `GET /` - Engine status
+- `GET /health/liveness` - Process Liveness Probe (Returns 200 OK)
+- `GET /health/readiness` - Database Readiness Probe (Returns 200 OK when DB connected, 503 when disconnected)
 - `POST /api/v1/generate` - Generate simulated AI completion & record token usage (Requires `Idempotency-Key` & Tenant Auth)
 - `GET /api/v1/usage` - Get current billing period usage summary, plan limits, and remaining quotas (Requires Tenant Auth)
 - `GET /api/v1/subscription` - Get tenant subscription details and status (Requires Tenant Auth)
 - `POST /api/v1/subscription/checkout` - Simulated zero-cost plan checkout (Free / Pro) (Requires Tenant Auth)
 - `POST /api/v1/subscription/cancel` - Cancel tenant active subscription (Requires Tenant Auth)
+- `POST /api/v1/subscription/reconcile` - Reconcile local subscription state with payment gateway (Requires Tenant Auth)
 - `GET /api/v1/invoices/current` - Itemized current monthly billing invoice statement (Requires Tenant Auth)
 - `GET /api/v1/invoices` - List historical monthly billing invoices (Requires Tenant Auth)
 - `GET /api/v1/invoices/:id` - Fetch invoice statement by ID (Requires Tenant Auth; Cross-tenant returns 404)
 - `POST /api/v1/webhooks/payment` - Process simulated payment-provider subscription lifecycle webhooks
 
-### Example Request (`GET /api/v1/subscription`)
+## Production Deployment & Operations Guide
 
+### 1. Production Architecture Overview
+In a production deployment, the Node.js application runs as an unprivileged user (`node`) inside the Docker container (`flyrank-metering-billing-app`), deployed behind an SSL/TLS termination proxy (Nginx, AWS ALB, Cloudflare, or Traefik).
+
+```text
+[Public API Clients / Webhooks] --(HTTPS)--> [TLS Proxy / ALB] --(HTTP/3000)--> [App Container] --(TCP/5432)--> [PostgreSQL DB]
+```
+
+### 2. Database Backup & Restore Procedures
+
+**Creating a Database Backup:**
 ```bash
-curl -H "Authorization: Bearer Demo Tenant" http://localhost:3000/api/v1/subscription
+./scripts/backup-db.sh ./backups/prod_backup_$(date +%Y%m%d).sql.gz
 ```
 
-### Example Response (`200 OK`)
-
-```json
-{
-  "tenant": {
-    "id": "32e8849a-6f0a-4639-9c57-30da0f98ca6f",
-    "name": "Demo Tenant"
-  },
-  "subscription": {
-    "id": "99cd2a2d-8877-489f-837b-99b86d123006",
-    "provider": "fake",
-    "customer_id": "fake_cust_32e8849a",
-    "subscription_id": "fake_sub_df4bd0e997c48984",
-    "plan": {
-      "name": "Pro",
-      "price_cents": 2900,
-      "monthly_api_limit": 50000,
-      "monthly_token_limit": 5000000
-    },
-    "status": "active",
-    "current_period_start": "2026-07-31T18:30:00.000Z",
-    "current_period_end": "2026-08-31T18:29:59.999Z"
-  }
-}
-```
-
-### Example Request (`POST /api/v1/generate`)
-
+**Restoring a Database Backup:**
 ```bash
-curl -X POST http://localhost:3000/api/v1/generate \
-  -H "Authorization: Bearer Demo Tenant" \
-  -H "Content-Type: application/json" \
-  -H "Idempotency-Key: demo-key-12345" \
-  -d '{
-    "input_tokens": 100,
-    "cached_tokens": 20,
-    "output_tokens": 50,
-    "reasoning_tokens": 10
-  }'
+./scripts/restore-db.sh ./backups/prod_backup_20260828.sql.gz
 ```
 
-### Example Response (`200 OK`)
+### 3. Production Rollback Procedure
+If a deployment fails health readiness checks:
+1. Revert to previous image version: `docker compose pull && docker compose up -d`
+2. Restore pre-migration database snapshot using `./scripts/restore-db.sh`.
+3. Verify readiness probe: `curl -f http://localhost:3000/health/readiness`.
 
-```json
-{
-  "success": true,
-  "result": {
-    "text": "This is a simulated AI-generated response from FlyRank."
-  },
-  "usage": {
-    "input_tokens": 100,
-    "cached_tokens": 20,
-    "output_tokens": 50,
-    "reasoning_tokens": 10,
-    "total_tokens": 180
-  }
-}
-```
+### 4. Operator Production Launch Checklist
+
+- [ ] **Environment Configuration**: Set `NODE_ENV=production`, `PORT=3000`, `DATABASE_URL`, `DB_POOL_MAX=20`, `DB_MAX_RETRIES=3`, `PAYMENT_PROVIDER=fake`.
+- [ ] **Database Migration**: Run `npm run db:migrate` against PostgreSQL instance.
+- [ ] **Database Seeding**: Run `npm run db:seed` to populate `plans` and initial tenant credentials.
+- [ ] **Docker Container Build**: Build production Alpine image (`docker compose build`).
+- [ ] **Liveness Probe Verification**: Query `GET /health/liveness` (returns 200 OK).
+- [ ] **Readiness Probe Verification**: Query `GET /health/readiness` (returns 200 OK with `database: connected`).
+- [ ] **Sanitization Audit**: Verify error responses omit stack traces, SQL strings, or credentials.
+- [ ] **Automated Test Suite**: Execute `npm test` (all 136 tests passing).
