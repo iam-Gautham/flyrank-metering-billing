@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "db:migrate": "docker exec -i metering_billing_postgres psql -U postgres -d metering_billing < src/db/schema.sql"
+    "db:migrate": "docker exec -i metering_billing_postgres psql -U postgres -d metering_billing < src/db/schema.sql",
+    "db:seed": "docker exec -i metering_billing_postgres psql -U postgres -d metering_billing < src/db/seed.sql"
   },
   "keywords": [],
   "author": "",

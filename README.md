@@ -37,7 +37,25 @@ To apply the database schema to PostgreSQL:
 npm run db:migrate
 ```
 
-### 3. Environment Variables
+### 3. Database Seeding
+
+To seed initial development data (plans and test tenant):
+
+```bash
+npm run db:seed
+```
+
+**Development Plans Configuration:**
+- **Free Plan**:
+  - API Limit: 1,000 requests/month
+  - Token Limit: 100,000 tokens/month
+  - Price: $0.00 (`0` cents)
+- **Pro Plan**:
+  - API Limit: 50,000 requests/month
+  - Token Limit: 5,000,000 tokens/month
+  - Price: $29.00 (`2900` cents)
+
+### 4. Environment Variables
 
 Copy `.env.example` to `.env`:
 
