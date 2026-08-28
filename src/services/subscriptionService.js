@@ -1,4 +1,5 @@
 const db = require('../db');
+const { getPaymentProvider } = require('./paymentProvider');
 
 /**
  * Gets or creates an active subscription for the given tenant.
@@ -76,6 +77,130 @@ async function getOrCreateActiveSubscription(tenantId, dbClient = db, forUpdate 
   };
 }
 
+/**
+ * Retrieves the current subscription details for a tenant.
+ * Throws 404 if no subscription exists for the tenant.
+ * 
+ * @param {string} tenantId
+ * @returns {Promise<Object>}
+ */
+async function getTenantSubscriptionDetails(tenantId) {
+  const query = `
+    SELECT s.*, p.name as plan_name, p.monthly_api_limit, p.monthly_token_limit, p.price_cents, t.name as tenant_name
+    FROM subscriptions s
+    JOIN plans p ON s.plan_id = p.id
+    JOIN tenants t ON s.tenant_id = t.id
+    WHERE s.tenant_id = $1
+    ORDER BY CASE WHEN s.status = 'active' THEN 1 ELSE 2 END, s.created_at DESC
+    LIMIT 1
+  `;
+
+  const result = await db.query(query, [tenantId]);
+  if (result.rows.length === 0) {
+    const error = new Error('No active subscription found for tenant.');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const sub = result.rows[0];
+  const provider = getPaymentProvider();
+
+  return {
+    tenant: {
+      id: sub.tenant_id,
+      name: sub.tenant_name,
+    },
+    subscription: {
+      id: sub.id,
+      provider: provider.name,
+      customer_id: sub.stripe_customer_id,
+      subscription_id: sub.stripe_subscription_id,
+      plan: {
+        name: sub.plan_name,
+        price_cents: sub.price_cents,
+        monthly_api_limit: sub.monthly_api_limit,
+        monthly_token_limit: sub.monthly_token_limit,
+      },
+      status: sub.status,
+      current_period_start: sub.current_period_start ? new Date(sub.current_period_start).toISOString() : null,
+      current_period_end: sub.current_period_end ? new Date(sub.current_period_end).toISOString() : null,
+    },
+  };
+}
+
+/**
+ * Transactionally cancels the active subscription for a tenant.
+ * Calls payment provider cancellation abstraction and updates PostgreSQL status to 'canceled'.
+ * 
+ * @param {string} tenantId
+ * @returns {Promise<Object>}
+ */
+async function cancelTenantActiveSubscription(tenantId) {
+  const client = await db.pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // 1. Lock active subscription row for tenant
+    const subRes = await client.query(
+      `SELECT s.*, p.name as plan_name 
+       FROM subscriptions s 
+       JOIN plans p ON s.plan_id = p.id 
+       WHERE s.tenant_id = $1 AND s.status = 'active' 
+       FOR UPDATE`,
+      [tenantId]
+    );
+
+    if (subRes.rows.length === 0) {
+      const error = new Error('No active subscription found to cancel.');
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const sub = subRes.rows[0];
+    const provider = getPaymentProvider();
+
+    // 2. Call payment provider cancellation if subscription_id exists
+    if (sub.stripe_subscription_id) {
+      try {
+        await provider.cancelSubscription(sub.stripe_subscription_id);
+      } catch (providerError) {
+        console.warn(`Payment provider cancelSubscription warning: ${providerError.message}`);
+      }
+    }
+
+    // 3. Update PostgreSQL subscription status to 'canceled'
+    const updateRes = await client.query(
+      "UPDATE subscriptions SET status = 'canceled' WHERE id = $1 RETURNING *",
+      [sub.id]
+    );
+    const updatedSub = updateRes.rows[0];
+
+    await client.query('COMMIT');
+
+    return {
+      success: true,
+      message: 'Subscription cancelled successfully.',
+      subscription: {
+        id: updatedSub.id,
+        provider: provider.name,
+        plan: sub.plan_name,
+        status: updatedSub.status,
+        customer_id: updatedSub.stripe_customer_id,
+        subscription_id: updatedSub.stripe_subscription_id,
+        current_period_start: updatedSub.current_period_start ? new Date(updatedSub.current_period_start).toISOString() : null,
+        current_period_end: updatedSub.current_period_end ? new Date(updatedSub.current_period_end).toISOString() : null,
+      },
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 module.exports = {
   getOrCreateActiveSubscription,
+  getTenantSubscriptionDetails,
+  cancelTenantActiveSubscription,
 };

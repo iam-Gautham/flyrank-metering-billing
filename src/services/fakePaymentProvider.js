@@ -83,13 +83,29 @@ class FakePaymentProvider {
    * Simulates processing a webhook event.
    */
   async processEvent(eventPayload = {}) {
-    const eventId = `fake_evt_${crypto.randomBytes(8).toString('hex')}`;
+    const eventId = eventPayload.id || `fake_evt_${crypto.randomBytes(8).toString('hex')}`;
     return {
       id: eventId,
       type: eventPayload.type || 'fake.payment_intent.succeeded',
       data: eventPayload.data || {},
       processed: true,
       processedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Generates a deterministic simulated lifecycle event for testing.
+   */
+  generateLifecycleEvent({ id, type, subscriptionId, status, planName }) {
+    const eventId = id || `fake_evt_${crypto.randomBytes(8).toString('hex')}`;
+    return {
+      id: eventId,
+      type: type || 'subscription.updated',
+      data: {
+        subscription_id: subscriptionId,
+        status: status || 'active',
+        plan_name: planName,
+      },
     };
   }
 }

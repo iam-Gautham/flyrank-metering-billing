@@ -103,7 +103,97 @@ npm start
 - `GET /` - Health check / Engine status
 - `POST /api/v1/generate` - Generate simulated AI completion & record token usage (Requires `Idempotency-Key` header)
 - `GET /api/v1/usage` - Get current billing period usage summary, plan limits, and remaining quotas
+- `GET /api/v1/subscription` - Get tenant subscription details and status
 - `POST /api/v1/subscription/checkout` - Simulated zero-cost plan checkout (Free / Pro)
+- `POST /api/v1/subscription/cancel` - Cancel tenant active subscription
+- `POST /api/v1/webhooks/payment` - Process simulated payment-provider subscription lifecycle webhooks
+
+### Example Request (`GET /api/v1/subscription`)
+
+```bash
+curl http://localhost:3000/api/v1/subscription
+```
+
+### Example Response (`200 OK`)
+
+```json
+{
+  "tenant": {
+    "id": "32e8849a-6f0a-4639-9c57-30da0f98ca6f",
+    "name": "Demo Tenant"
+  },
+  "subscription": {
+    "id": "99cd2a2d-8877-489f-837b-99b86d123006",
+    "provider": "fake",
+    "customer_id": "fake_cust_32e8849a",
+    "subscription_id": "fake_sub_df4bd0e997c48984",
+    "plan": {
+      "name": "Pro",
+      "price_cents": 2900,
+      "monthly_api_limit": 50000,
+      "monthly_token_limit": 5000000
+    },
+    "status": "active",
+    "current_period_start": "2026-07-31T18:30:00.000Z",
+    "current_period_end": "2026-08-31T18:29:59.999Z"
+  }
+}
+```
+
+### Example Request (`POST /api/v1/subscription/cancel`)
+
+```bash
+curl -X POST http://localhost:3000/api/v1/subscription/cancel
+```
+
+### Example Cancel Response (`200 OK`)
+
+```json
+{
+  "success": true,
+  "message": "Subscription cancelled successfully.",
+  "subscription": {
+    "id": "99cd2a2d-8877-489f-837b-99b86d123006",
+    "provider": "fake",
+    "plan": "Pro",
+    "status": "canceled",
+    "customer_id": "fake_cust_32e8849a",
+    "subscription_id": "fake_sub_df4bd0e997c48984",
+    "current_period_start": "2026-07-31T18:30:00.000Z",
+    "current_period_end": "2026-08-31T18:29:59.999Z"
+  }
+}
+```
+
+### Example Request (`POST /api/v1/webhooks/payment`)
+
+```bash
+curl -X POST http://localhost:3000/api/v1/webhooks/payment \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "fake_evt_001",
+    "type": "subscription.updated",
+    "data": {
+      "subscription_id": "fake_sub_df4bd0e997c48984",
+      "status": "active",
+      "plan_name": "Pro"
+    }
+  }'
+```
+
+### Example Webhook Response (`200 OK`)
+
+```json
+{
+  "success": true,
+  "message": "Successfully processed event 'subscription.updated'.",
+  "event_id": "fake_evt_001",
+  "subscription_id": "fake_sub_df4bd0e997c48984",
+  "status": "active"
+}
+```
+
+> **Simulated Webhook Note:** Powered by the local fake payment provider (`PAYMENT_PROVIDER=fake`), this endpoint requires no webhook signing secret, no external account or card, costs ₹0, and processes events with 100% database-enforced transaction safety and idempotency.
 
 ### Example Request (`POST /api/v1/subscription/checkout`)
 

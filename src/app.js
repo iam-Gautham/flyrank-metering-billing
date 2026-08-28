@@ -2,6 +2,7 @@ const express = require('express');
 const generateRoutes = require('./routes/generateRoutes');
 const usageRoutes = require('./routes/usageRoutes');
 const subscriptionRoutes = require('./routes/subscriptionRoutes');
+const webhookRoutes = require('./routes/webhookRoutes');
 
 const app = express();
 
@@ -16,6 +17,7 @@ app.get('/', (req, res) => {
 app.use('/api/v1', generateRoutes);
 app.use('/api/v1', usageRoutes);
 app.use('/api/v1', subscriptionRoutes);
+app.use('/api/v1', webhookRoutes);
 
 // Centralized error handling middleware
 app.use((err, req, res, next) => {
