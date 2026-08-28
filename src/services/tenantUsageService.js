@@ -27,12 +27,12 @@ async function getTenantUsage(tenantId) {
     ? new Date(subscription.current_period_end)
     : new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
 
-  // 3. Query API calls count within billing period (usage_type = 'API_CALL' or 'AI_TOKENS')
+  // 3. Query API calls count within billing period (usage_type = 'API_CALL')
   const apiCallsQuery = `
     SELECT COUNT(*)::integer as api_calls_used
     FROM usage_events
     WHERE tenant_id = $1
-      AND usage_type IN ('API_CALL', 'AI_TOKENS')
+      AND usage_type = 'API_CALL'
       AND created_at >= $2
       AND created_at <= $3
   `;

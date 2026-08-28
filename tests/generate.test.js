@@ -57,7 +57,7 @@ test('POST /api/v1/generate - returns 400 Bad Request when token values are inva
   assert.strictEqual(res.body.error, 'Bad Request');
 });
 
-test('POST /api/v1/generate - basic successful request, idempotent duplicate, and different key', async () => {
+test('POST /api/v1/generate - creates atomic API_CALL and AI_TOKENS events, handles idempotency and distinct keys', async () => {
   const body1 = { input_tokens: 100, cached_tokens: 20, output_tokens: 50, reasoning_tokens: 10 };
   const key1 = 'key-uuid-001';
 
@@ -71,12 +71,24 @@ test('POST /api/v1/generate - basic successful request, idempotent duplicate, an
   assert.strictEqual(res1.body.success, true);
   assert.strictEqual(res1.body.usage.total_tokens, 180);
 
-  // DB Cost check for key1 (136,500 nano-cents rounds to 0 cents)
-  const event1Res = await db.query('SELECT cost_cents, input_tokens, cached_tokens, output_tokens, reasoning_tokens FROM usage_events WHERE idempotency_key = $1', [key1]);
-  assert.strictEqual(event1Res.rows.length, 1);
-  assert.strictEqual(event1Res.rows[0].cost_cents, 0);
+  // DB Dual Event Check: exactly 1 API_CALL and 1 AI_TOKENS event created for key1
+  const eventsKey1 = await db.query('SELECT * FROM usage_events WHERE idempotency_key LIKE $1 ORDER BY usage_type', [`${key1}:%`]);
+  assert.strictEqual(eventsKey1.rows.length, 2);
 
-  // Duplicate request
+  const apiCallEvent = eventsKey1.rows.find(e => e.usage_type === 'API_CALL');
+  const aiTokensEvent = eventsKey1.rows.find(e => e.usage_type === 'AI_TOKENS');
+
+  assert.ok(apiCallEvent);
+  assert.strictEqual(apiCallEvent.quantity, 1);
+  assert.strictEqual(apiCallEvent.input_tokens, 0);
+  assert.strictEqual(apiCallEvent.cost_cents, 0);
+
+  assert.ok(aiTokensEvent);
+  assert.strictEqual(aiTokensEvent.quantity, 180);
+  assert.strictEqual(aiTokensEvent.input_tokens, 100);
+  assert.strictEqual(aiTokensEvent.cost_cents, 0);
+
+  // Duplicate request with same key
   const res2 = await request(app)
     .post('/api/v1/generate')
     .set('Idempotency-Key', key1)
@@ -85,9 +97,9 @@ test('POST /api/v1/generate - basic successful request, idempotent duplicate, an
 
   assert.strictEqual(res2.body.usage.total_tokens, 180);
 
-  // DB Count check
+  // DB Count check (still 2 events)
   const countRes = await db.query('SELECT COUNT(*) FROM usage_events');
-  assert.strictEqual(parseInt(countRes.rows[0].count, 10), 1);
+  assert.strictEqual(parseInt(countRes.rows[0].count, 10), 2);
 
   // Different key request
   const key2 = 'key-uuid-002';
@@ -98,25 +110,25 @@ test('POST /api/v1/generate - basic successful request, idempotent duplicate, an
     .expect(200);
 
   const countRes2 = await db.query('SELECT COUNT(*) FROM usage_events');
-  assert.strictEqual(parseInt(countRes2.rows[0].count, 10), 2);
+  assert.strictEqual(parseInt(countRes2.rows[0].count, 10), 4);
 });
 
-test('POST /api/v1/generate - API Call Quota enforcement (below, exactly at, and exceeding quota)', async () => {
+test('POST /api/v1/generate - API Call Quota enforcement (counts API_CALL events)', async () => {
   const tenant = await getDemoTenant();
   const sub = await getOrCreateActiveSubscription(tenant.id);
   const apiLimit = sub.monthly_api_limit; // 1000
 
-  // Batch insert (apiLimit - 2) usage events to reach 998 API calls
+  // Seed (apiLimit - 2) API_CALL events to reach 998 API calls
   const now = new Date();
   await db.query(
     `INSERT INTO usage_events (tenant_id, idempotency_key, usage_type, quantity, created_at)
-     SELECT $1, 'seed-key-' || g, 'AI_TOKENS', 10, $2
+     SELECT $1, 'seed-key-' || g, 'API_CALL', 1, $2
      FROM generate_series(1, $3) AS g`,
     [tenant.id, now, apiLimit - 2]
   );
 
-  const countBefore = await db.query('SELECT COUNT(*) FROM usage_events');
-  assert.strictEqual(parseInt(countBefore.rows[0].count, 10), 998);
+  const apiCountBefore = await db.query("SELECT COUNT(*) FROM usage_events WHERE usage_type = 'API_CALL'");
+  assert.strictEqual(parseInt(apiCountBefore.rows[0].count, 10), 998);
 
   // a. Request below API quota (call #999) -> SUCCEEDS
   const resBelow = await request(app)
@@ -134,8 +146,8 @@ test('POST /api/v1/generate - API Call Quota enforcement (below, exactly at, and
     .expect(200);
   assert.strictEqual(resExact.body.success, true);
 
-  const countAtLimit = await db.query('SELECT COUNT(*) FROM usage_events');
-  assert.strictEqual(parseInt(countAtLimit.rows[0].count, 10), 1000);
+  const apiCountAtLimit = await db.query("SELECT COUNT(*) FROM usage_events WHERE usage_type = 'API_CALL'");
+  assert.strictEqual(parseInt(apiCountAtLimit.rows[0].count, 10), 1000);
 
   // c. Request exceeding API quota (call #1001) -> REJECTED 429
   const resExceed = await request(app)
@@ -148,12 +160,12 @@ test('POST /api/v1/generate - API Call Quota enforcement (below, exactly at, and
   assert.strictEqual(resExceed.body.quota_type, 'API_CALLS');
   assert.match(resExceed.body.message, /API call limit exceeded/i);
 
-  // g. Verify rejected request created NO usage event
-  const countAfterExceed = await db.query('SELECT COUNT(*) FROM usage_events');
-  assert.strictEqual(parseInt(countAfterExceed.rows[0].count, 10), 1000);
+  // g. Verify rejected request created NEITHER API_CALL nor AI_TOKENS event
+  const apiCountAfterExceed = await db.query("SELECT COUNT(*) FROM usage_events WHERE usage_type = 'API_CALL'");
+  assert.strictEqual(parseInt(apiCountAfterExceed.rows[0].count, 10), 1000);
 });
 
-test('POST /api/v1/generate - AI Token Quota enforcement (below, exactly at, and exceeding quota)', async () => {
+test('POST /api/v1/generate - AI Token Quota enforcement (counts AI_TOKENS events)', async () => {
   const tenant = await getDemoTenant();
   const sub = await getOrCreateActiveSubscription(tenant.id);
   const tokenLimit = sub.monthly_token_limit; // 100,000
@@ -200,7 +212,7 @@ test('POST /api/v1/generate - AI Token Quota enforcement (below, exactly at, and
     .expect(200);
   assert.strictEqual(resDup.body.usage.total_tokens, 200);
 
-  // g. Verify rejected request created NO usage event (total rows = 3: seed + below + exact)
+  // g. Verify rejected request created NEITHER event (total rows = 5: 1 seed + 2 API_CALL + 2 AI_TOKENS)
   const countAfterExceed = await db.query('SELECT COUNT(*) FROM usage_events');
-  assert.strictEqual(parseInt(countAfterExceed.rows[0].count, 10), 3);
+  assert.strictEqual(parseInt(countAfterExceed.rows[0].count, 10), 5);
 });

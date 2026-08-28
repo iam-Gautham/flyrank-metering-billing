@@ -3,18 +3,24 @@ const db = require('../db');
 
 /**
  * Find an existing usage event by tenant ID and idempotency key.
+ * Checks exact key as well as dual-event keys (${idempotencyKey}:tokens / ${idempotencyKey}:api).
  * 
  * @param {string} tenantId
  * @param {string} idempotencyKey
  * @returns {Promise<Object|null>}
  */
 async function findUsageEvent(tenantId, idempotencyKey) {
+  const tokensKey = `${idempotencyKey}:tokens`;
+  const apiKey = `${idempotencyKey}:api`;
+
   const queryText = `
     SELECT * FROM usage_events 
-    WHERE tenant_id = $1 AND idempotency_key = $2 
+    WHERE tenant_id = $1 
+      AND (idempotency_key = $2 OR idempotency_key = $3 OR idempotency_key = $4)
+    ORDER BY CASE WHEN usage_type = 'AI_TOKENS' THEN 1 ELSE 2 END
     LIMIT 1
   `;
-  const result = await db.query(queryText, [tenantId, idempotencyKey]);
+  const result = await db.query(queryText, [tenantId, idempotencyKey, tokensKey, apiKey]);
   return result.rows[0] || null;
 }
 

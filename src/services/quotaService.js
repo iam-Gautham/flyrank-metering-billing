@@ -16,13 +16,13 @@ class QuotaExceededError extends Error {
 }
 
 /**
- * Validates monthly quotas and records usage in a single transaction with FOR UPDATE row-level locking.
+ * Validates monthly quotas and atomically records both API_CALL and AI_TOKENS usage events
+ * in a single PostgreSQL transaction with FOR UPDATE row-level locking.
  * Safe against concurrent duplicate requests.
  */
 async function checkAndRecordUsageTransaction({
   tenantId,
   idempotencyKey,
-  usageType = 'AI_TOKENS',
   quantity,
   inputTokens = 0,
   cachedTokens = 0,
@@ -45,31 +45,41 @@ async function checkAndRecordUsageTransaction({
       ? new Date(subscription.current_period_end)
       : new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
 
-    // 2. Query total usage in current billing period
-    const usageQuery = `
-      SELECT 
-        COUNT(*)::integer as total_api_calls,
-        COALESCE(SUM(quantity), 0)::integer as total_tokens
+    // 2. Query total API calls used (usage_type = 'API_CALL')
+    const apiCallsQuery = `
+      SELECT COUNT(*)::integer as api_calls_used
       FROM usage_events
       WHERE tenant_id = $1
+        AND usage_type = 'API_CALL'
         AND created_at >= $2
         AND created_at <= $3
     `;
-    const usageResult = await client.query(usageQuery, [tenantId, periodStart, periodEnd]);
-    const currentApiCalls = usageResult.rows[0].total_api_calls;
-    const currentTokens = usageResult.rows[0].total_tokens;
+    const apiCallsResult = await client.query(apiCallsQuery, [tenantId, periodStart, periodEnd]);
+    const currentApiCalls = apiCallsResult.rows[0].api_calls_used;
 
-    // 3. Enforce API Call Quota
+    // 3. Query total AI tokens used (usage_type = 'AI_TOKENS')
+    const aiTokensQuery = `
+      SELECT COALESCE(SUM(quantity), 0)::integer as ai_tokens_used
+      FROM usage_events
+      WHERE tenant_id = $1
+        AND usage_type = 'AI_TOKENS'
+        AND created_at >= $2
+        AND created_at <= $3
+    `;
+    const aiTokensResult = await client.query(aiTokensQuery, [tenantId, periodStart, periodEnd]);
+    const currentTokens = aiTokensResult.rows[0].ai_tokens_used;
+
+    // 4. Enforce API Call Quota (COUNT(API_CALL))
     if (currentApiCalls + 1 > subscription.monthly_api_limit) {
       throw new QuotaExceededError('API_CALLS', subscription.monthly_api_limit, currentApiCalls, 1);
     }
 
-    // 4. Enforce Token Quota
+    // 5. Enforce Token Quota (SUM(AI_TOKENS.quantity))
     if (currentTokens + quantity > subscription.monthly_token_limit) {
       throw new QuotaExceededError('AI_TOKENS', subscription.monthly_token_limit, currentTokens, quantity);
     }
 
-    // 5. Calculate AI Token Cost using integer monetary arithmetic if costCents not explicitly supplied
+    // 6. Calculate AI Token Cost using integer monetary arithmetic
     const finalCostCents = typeof costCents === 'number'
       ? costCents
       : calculateTokenCost({
@@ -79,8 +89,12 @@ async function checkAndRecordUsageTransaction({
           reasoning_tokens: reasoningTokens,
         }).costCents;
 
-    // 6. Insert Usage Event
-    const insertQuery = `
+    // Derive deterministic, unique idempotency keys for both events
+    const apiEventKey = `${idempotencyKey}:api`;
+    const tokensEventKey = `${idempotencyKey}:tokens`;
+
+    // 7. Insert API_CALL usage event (quantity = 1, token fields = 0, cost_cents = 0)
+    const insertApiQuery = `
       INSERT INTO usage_events (
         tenant_id,
         idempotency_key,
@@ -91,25 +105,38 @@ async function checkAndRecordUsageTransaction({
         output_tokens,
         reasoning_tokens,
         cost_cents
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      ) VALUES ($1, $2, 'API_CALL', 1, 0, 0, 0, 0, 0)
+    `;
+    await client.query(insertApiQuery, [tenantId, apiEventKey]);
+
+    // 8. Insert AI_TOKENS usage event (quantity = total_tokens, stored token categories, cost_cents)
+    const insertTokensQuery = `
+      INSERT INTO usage_events (
+        tenant_id,
+        idempotency_key,
+        usage_type,
+        quantity,
+        input_tokens,
+        cached_tokens,
+        output_tokens,
+        reasoning_tokens,
+        cost_cents
+      ) VALUES ($1, $2, 'AI_TOKENS', $3, $4, $5, $6, $7, $8)
       RETURNING *
     `;
-    const insertValues = [
+    const tokensResult = await client.query(insertTokensQuery, [
       tenantId,
-      idempotencyKey,
-      usageType,
+      tokensEventKey,
       quantity,
       inputTokens,
       cachedTokens,
       outputTokens,
       reasoningTokens,
       finalCostCents,
-    ];
-
-    const insertResult = await client.query(insertQuery, insertValues);
+    ]);
 
     await client.query('COMMIT');
-    return insertResult.rows[0];
+    return tokensResult.rows[0];
   } catch (error) {
     await client.query('ROLLBACK');
     // Handle unique_violation (code 23505) gracefully if concurrent insert happened
