@@ -1,4 +1,5 @@
 const express = require('express');
+const { authenticateTenant } = require('../middleware/authMiddleware');
 const {
   handleGetCurrentInvoice,
   handleGetInvoices,
@@ -7,8 +8,8 @@ const {
 
 const router = express.Router();
 
-router.get('/invoices/current', handleGetCurrentInvoice);
-router.get('/invoices', handleGetInvoices);
-router.get('/invoices/:id', handleGetInvoiceById);
+router.get('/invoices/current', authenticateTenant, handleGetCurrentInvoice);
+router.get('/invoices', authenticateTenant, handleGetInvoices);
+router.get('/invoices/:id', authenticateTenant, handleGetInvoiceById);
 
 module.exports = router;

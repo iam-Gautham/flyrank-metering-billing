@@ -1,4 +1,3 @@
-const { getDemoTenant } = require('../services/tenantService');
 const { findUsageEvent } = require('../services/usageService');
 const { QuotaExceededError, checkAndRecordUsageTransaction } = require('../services/quotaService');
 
@@ -11,6 +10,7 @@ function isNonNegativeInteger(val) {
 
 /**
  * Controller for POST /api/v1/generate
+ * Uses authenticated tenant identity attached by authenticateTenant middleware.
  */
 async function handleGenerate(req, res, next) {
   try {
@@ -39,8 +39,8 @@ async function handleGenerate(req, res, next) {
       });
     }
 
-    // 3. Fetch Demo Tenant
-    const tenant = await getDemoTenant();
+    // 3. Authoritative Tenant Identity from authentication middleware
+    const tenant = req.tenant;
 
     // 4. Check application-level idempotency FIRST before quota check
     const existingEvent = await findUsageEvent(tenant.id, idempotencyKey);

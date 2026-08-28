@@ -1,9 +1,9 @@
-const { getDemoTenant } = require('../services/tenantService');
 const { createSubscriptionCheckout } = require('../services/checkoutService');
 const { getTenantSubscriptionDetails, cancelTenantActiveSubscription } = require('../services/subscriptionService');
 
 /**
  * Controller for POST /api/v1/subscription/checkout
+ * Uses authenticated tenant identity attached by authenticateTenant middleware.
  */
 async function handleCheckout(req, res, next) {
   try {
@@ -26,7 +26,7 @@ async function handleCheckout(req, res, next) {
     const rawIdempotencyKey = req.get('Idempotency-Key') || req.headers['idempotency-key'];
     const idempotencyKey = rawIdempotencyKey && typeof rawIdempotencyKey === 'string' ? rawIdempotencyKey.trim() : null;
 
-    const tenant = await getDemoTenant();
+    const tenant = req.tenant;
     const result = await createSubscriptionCheckout({
       tenantId: tenant.id,
       planName: plan_name.trim(),
@@ -47,10 +47,11 @@ async function handleCheckout(req, res, next) {
 
 /**
  * Controller for GET /api/v1/subscription
+ * Uses authenticated tenant identity attached by authenticateTenant middleware.
  */
 async function handleGetSubscription(req, res, next) {
   try {
-    const tenant = await getDemoTenant();
+    const tenant = req.tenant;
     const result = await getTenantSubscriptionDetails(tenant.id);
     return res.status(200).json(result);
   } catch (error) {
@@ -66,10 +67,11 @@ async function handleGetSubscription(req, res, next) {
 
 /**
  * Controller for POST /api/v1/subscription/cancel
+ * Uses authenticated tenant identity attached by authenticateTenant middleware.
  */
 async function handleCancelSubscription(req, res, next) {
   try {
-    const tenant = await getDemoTenant();
+    const tenant = req.tenant;
     const result = await cancelTenantActiveSubscription(tenant.id);
     return res.status(200).json(result);
   } catch (error) {

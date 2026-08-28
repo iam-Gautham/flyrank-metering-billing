@@ -9,10 +9,16 @@ Backend service for FlyRank usage metering and billing infrastructure.
         |                                       |                              |
  (POST /generate)                       (GET /usage)                    (POST /checkout)
  [Idempotency-Key]                      [Billing Period]                [Plan Upgrades]
+ [Auth: Bearer / x-tenant-id]           [Auth: Bearer / x-tenant-id]   [Auth: Bearer / x-tenant-id]
         |                                       |                              |
         v                                       v                              v
 +-----------------------------------------------------------------------------------+
 |                             EXPRESS API / ROUTER LAYER                            |
++-----------------------------------------------------------------------------------+
+        |                                       |                              |
+        v                                       v                              v
++-----------------------------------------------------------------------------------+
+|                       authenticateTenant Middleware (Auth & Tenant Context)       |
 +-----------------------------------------------------------------------------------+
         |                                       |                              |
         v                                       v                              v
@@ -38,6 +44,20 @@ Backend service for FlyRank usage metering and billing infrastructure.
                             | - webhook_events                                 |
                             +--------------------------------------------------+
 ```
+
+## Security & Authentication Model (Phase 5.4)
+
+### 1. Authentication Middleware (`authenticateTenant`)
+All protected API endpoints require authenticated tenant context:
+- Accepts `Authorization: Bearer <token_or_tenant_id>`, `X-API-Key`, or `x-tenant-id` headers.
+- Authenticates credentials against PostgreSQL database (`SELECT id, name FROM tenants WHERE id::text = $1 OR name = $1`).
+- Returns **HTTP 401 Unauthorized** for invalid, expired, or non-existent tenant identities.
+- Unauthenticated requests in local development fall back to the default Demo Tenant.
+
+### 2. Tenant Authorization & Cross-Tenant Security Invariants
+- `req.tenant` attached by `authenticateTenant` is the **authoritative tenant identity** across all controllers and services.
+- **Cross-Tenant Isolation**: Requesting another tenant's invoice ID (`GET /api/v1/invoices/:id`) returns **HTTP 404 Not Found** without leaking whether the resource exists.
+- **Idempotency Security**: Idempotency keys are evaluated against `(tenant_id, idempotency_key)` in PostgreSQL, ensuring identical keys used by different tenants never collide or leak cached responses.
 
 ## Prerequisites
 
@@ -153,17 +173,20 @@ npm test
 ## API Endpoints
 
 - `GET /` - Health check / Engine status
-- `POST /api/v1/generate` - Generate simulated AI completion & record token usage (Requires `Idempotency-Key` header)
-- `GET /api/v1/usage` - Get current billing period usage summary, plan limits, and remaining quotas
-- `GET /api/v1/subscription` - Get tenant subscription details and status
-- `POST /api/v1/subscription/checkout` - Simulated zero-cost plan checkout (Free / Pro)
-- `POST /api/v1/subscription/cancel` - Cancel tenant active subscription
+- `POST /api/v1/generate` - Generate simulated AI completion & record token usage (Requires `Idempotency-Key` & Tenant Auth)
+- `GET /api/v1/usage` - Get current billing period usage summary, plan limits, and remaining quotas (Requires Tenant Auth)
+- `GET /api/v1/subscription` - Get tenant subscription details and status (Requires Tenant Auth)
+- `POST /api/v1/subscription/checkout` - Simulated zero-cost plan checkout (Free / Pro) (Requires Tenant Auth)
+- `POST /api/v1/subscription/cancel` - Cancel tenant active subscription (Requires Tenant Auth)
+- `GET /api/v1/invoices/current` - Itemized current monthly billing invoice statement (Requires Tenant Auth)
+- `GET /api/v1/invoices` - List historical monthly billing invoices (Requires Tenant Auth)
+- `GET /api/v1/invoices/:id` - Fetch invoice statement by ID (Requires Tenant Auth; Cross-tenant returns 404)
 - `POST /api/v1/webhooks/payment` - Process simulated payment-provider subscription lifecycle webhooks
 
 ### Example Request (`GET /api/v1/subscription`)
 
 ```bash
-curl http://localhost:3000/api/v1/subscription
+curl -H "Authorization: Bearer Demo Tenant" http://localhost:3000/api/v1/subscription
 ```
 
 ### Example Response (`200 OK`)
@@ -192,114 +215,11 @@ curl http://localhost:3000/api/v1/subscription
 }
 ```
 
-### Example Request (`POST /api/v1/subscription/cancel`)
-
-```bash
-curl -X POST http://localhost:3000/api/v1/subscription/cancel
-```
-
-### Example Cancel Response (`200 OK`)
-
-```json
-{
-  "success": true,
-  "message": "Subscription cancelled successfully.",
-  "subscription": {
-    "id": "99cd2a2d-8877-489f-837b-99b86d123006",
-    "provider": "fake",
-    "plan": "Pro",
-    "status": "canceled",
-    "customer_id": "fake_cust_32e8849a",
-    "subscription_id": "fake_sub_df4bd0e997c48984",
-    "current_period_start": "2026-07-31T18:30:00.000Z",
-    "current_period_end": "2026-08-31T18:29:59.999Z"
-  }
-}
-```
-
-### Example Request (`POST /api/v1/webhooks/payment`)
-
-```bash
-curl -X POST http://localhost:3000/api/v1/webhooks/payment \
-  -H "Content-Type: application/json" \
-  -d '{
-    "id": "fake_evt_001",
-    "type": "subscription.updated",
-    "data": {
-      "subscription_id": "fake_sub_df4bd0e997c48984",
-      "status": "active",
-      "plan_name": "Pro"
-    }
-  }'
-```
-
-### Example Webhook Response (`200 OK`)
-
-```json
-{
-  "success": true,
-  "message": "Successfully processed event 'subscription.updated'.",
-  "event_id": "fake_evt_001",
-  "subscription_id": "fake_sub_df4bd0e997c48984",
-  "status": "active"
-}
-```
-
-> **Production Billing Engine Note:** Powered by the local fake payment provider (`PAYMENT_PROVIDER=fake`), this engine costs ₹0, requires no external credentials, and guarantees a complete billing state machine (`active`, `past_due`, `canceled`), payment recovery, renewal period updates, out-of-order event protection, strict tenant-subscription isolation, sanitized internal 500 error responses, database-schema-enforced single active subscription invariant (`idx_single_active_subscription_per_tenant`), graceful shutdown (`SIGTERM`/`SIGINT`), container health check probes (`GET /health`), and itemized monthly billing invoices (`GET /api/v1/invoices/current`).
-
-### Current Monthly Invoice Statement Endpoint (`GET /api/v1/invoices/current`)
-
-```bash
-curl http://localhost:3000/api/v1/invoices/current
-```
-
-```json
-{
-  "invoice": {
-    "id": "inv_32e8849a_202608",
-    "tenant_id": "32e8849a-6f0a-4639-9c57-30da0f98ca6f",
-    "status": "paid",
-    "currency": "USD",
-    "plan_name": "Pro",
-    "period_start": "2026-07-31T18:30:00.000Z",
-    "period_end": "2026-08-31T18:29:59.999Z",
-    "subtotal_cents": 3350,
-    "tax_cents": 0,
-    "total_cents": 3350,
-    "line_items": [
-      {
-        "description": "Base Subscription Fee - Pro Plan",
-        "quantity": 1,
-        "unit_price_cents": 2900,
-        "amount_cents": 2900
-      },
-      {
-        "description": "API Call Requests",
-        "quantity": 1,
-        "unit_price_cents": 0,
-        "amount_cents": 0
-      },
-      {
-        "description": "Input AI Tokens ($3.00 / 1M)",
-        "quantity": 1000000,
-        "rate_per_million_dollars": 3,
-        "amount_cents": 300
-      },
-      {
-        "description": "Output AI Tokens ($15.00 / 1M)",
-        "quantity": 100000,
-        "rate_per_million_dollars": 15,
-        "amount_cents": 150
-      }
-    ]
-  }
-}
-```
-
 ### Example Request (`POST /api/v1/generate`)
 
 ```bash
 curl -X POST http://localhost:3000/api/v1/generate \
+  -H "Authorization: Bearer Demo Tenant" \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: demo-key-12345" \
   -d '{
@@ -325,51 +245,5 @@ curl -X POST http://localhost:3000/api/v1/generate \
     "reasoning_tokens": 10,
     "total_tokens": 180
   }
-}
-```
-
-### Example Request (`GET /api/v1/usage`)
-
-```bash
-curl http://localhost:3000/api/v1/usage
-```
-
-### Example Usage Response (`200 OK`)
-
-```json
-{
-  "tenant": {
-    "id": "32e8849a-6f0a-4639-9c57-30da0f98ca6f",
-    "name": "Demo Tenant"
-  },
-  "plan": {
-    "name": "Free"
-  },
-  "period": {
-    "start": "2026-08-01T00:00:00.000Z",
-    "end": "2026-08-31T23:59:59.999Z"
-  },
-  "usage": {
-    "api_calls": {
-      "used": 1,
-      "limit": 1000,
-      "remaining": 999
-    },
-    "ai_tokens": {
-      "used": 180,
-      "limit": 100000,
-      "remaining": 99820
-    }
-  }
-}
-```
-
-### Quota Exceeded Response (`429 Too Many Requests`)
-
-```json
-{
-  "error": "Too Many Requests",
-  "quota_type":"API_CALLS",
-  "message": "Monthly API call limit exceeded. Limit: 1000, Current: 1000, Requested: 1."
 }
 ```

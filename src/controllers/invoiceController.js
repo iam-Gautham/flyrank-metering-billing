@@ -1,54 +1,77 @@
-const { resolveTenant } = require('../services/tenantService');
 const { generateTenantInvoice, listTenantInvoices } = require('../services/invoiceService');
 
 /**
  * Controller for GET /api/v1/invoices/current
- * Scoped strictly to the authenticated/request tenant context.
+ * Uses authenticated tenant identity attached by authenticateTenant middleware.
  */
 async function handleGetCurrentInvoice(req, res, next) {
   try {
-    const tenant = await resolveTenant(req);
+    const tenant = req.tenant;
     const invoiceData = await generateTenantInvoice(tenant.id);
     return res.status(200).json(invoiceData);
   } catch (error) {
+    if (error.userFacing) {
+      return res.status(error.statusCode || 400).json({
+        error: 'Bad Request',
+        message: error.message,
+      });
+    }
     return next(error);
   }
 }
 
 /**
  * Controller for GET /api/v1/invoices
- * Scoped strictly to the authenticated/request tenant context.
+ * Uses authenticated tenant identity attached by authenticateTenant middleware.
  */
 async function handleGetInvoices(req, res, next) {
   try {
-    const tenant = await resolveTenant(req);
+    const tenant = req.tenant;
     const invoicesData = await listTenantInvoices(tenant.id);
     return res.status(200).json(invoicesData);
   } catch (error) {
+    if (error.userFacing) {
+      return res.status(error.statusCode || 400).json({
+        error: 'Bad Request',
+        message: error.message,
+      });
+    }
     return next(error);
   }
 }
 
 /**
  * Controller for GET /api/v1/invoices/:id
- * Scoped strictly to the authenticated/request tenant context.
- * Returns HTTP 404 Not Found if invoice ID does not belong to the target tenant.
+ * Uses authenticated tenant identity attached by authenticateTenant middleware.
+ * Guarantees cross-tenant access returns HTTP 404 Not Found without leaking financial data.
  */
 async function handleGetInvoiceById(req, res, next) {
   try {
     const { id } = req.params;
-    const tenant = await resolveTenant(req);
-    const invoiceData = await generateTenantInvoice(tenant.id);
+    if (!id || typeof id !== 'string' || id.trim() === '') {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'Invoice ID is required.',
+      });
+    }
 
-    if (invoiceData.invoice.id !== id) {
+    const tenant = req.tenant;
+    const invoiceData = await generateTenantInvoice(tenant.id);
+    if (invoiceData.invoice.id !== id.trim()) {
       return res.status(404).json({
         error: 'Not Found',
-        message: `Invoice '${id}' not found.`,
+        message: `Invoice '${id.trim()}' not found.`,
       });
     }
 
     return res.status(200).json(invoiceData);
   } catch (error) {
+    if (error.userFacing) {
+      return res.status(error.statusCode || 400).json({
+        error: 'Bad Request',
+        message: error.message,
+      });
+    }
     return next(error);
   }
 }

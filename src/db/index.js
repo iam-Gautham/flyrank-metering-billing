@@ -19,6 +19,11 @@ const pool = process.env.DATABASE_URL
       connectionTimeoutMillis: 5000,
     });
 
+// Handle idle client connection pool errors gracefully to prevent process crashes
+pool.on('error', (err) => {
+  console.error('Unexpected idle client error in PostgreSQL connection pool:', err.message);
+});
+
 module.exports = {
   query: (text, params) => pool.query(text, params),
   pool,

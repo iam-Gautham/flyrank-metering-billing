@@ -1,5 +1,6 @@
 const express = require('express');
 const db = require('./db');
+const logger = require('./utils/logger');
 const generateRoutes = require('./routes/generateRoutes');
 const usageRoutes = require('./routes/usageRoutes');
 const subscriptionRoutes = require('./routes/subscriptionRoutes');
@@ -7,6 +8,27 @@ const webhookRoutes = require('./routes/webhookRoutes');
 const invoiceRoutes = require('./routes/invoiceRoutes');
 
 const app = express();
+
+let isShuttingDown = false;
+
+/**
+ * Flag server shutdown state to reject new HTTP traffic gracefully.
+ */
+app.setShuttingDown = (flag) => {
+  isShuttingDown = flag;
+};
+
+// Shutdown guard middleware
+app.use((req, res, next) => {
+  if (isShuttingDown) {
+    res.setHeader('Connection', 'close');
+    return res.status(503).json({
+      error: 'Service Unavailable',
+      message: 'Server is undergoing graceful shutdown. Please retry request.',
+    });
+  }
+  next();
+});
 
 // Enforce 1MB request body payload limit for API security
 app.use(express.json({ limit: '1mb' }));
@@ -16,7 +38,22 @@ app.get('/', (req, res) => {
   res.json({ message: 'Usage Metering & Billing Engine' });
 });
 
-// Standardized container readiness and health check probe endpoints
+// Liveness Probe Endpoint (Checks if process is running)
+app.get('/health/liveness', (req, res) => {
+  return res.status(200).json({ status: 'ok', liveness: 'alive' });
+});
+
+// Readiness Probe Endpoint (Checks if service can serve traffic)
+app.get('/health/readiness', async (req, res) => {
+  try {
+    await db.query('SELECT 1');
+    return res.status(200).json({ status: 'ok', readiness: 'ready', database: 'connected' });
+  } catch (err) {
+    return res.status(503).json({ status: 'error', readiness: 'not_ready', database: 'disconnected', message: 'Database connectivity failed.' });
+  }
+});
+
+// Standardized container readiness and health check probe endpoints (Backward Compatibility)
 app.get('/health', async (req, res) => {
   try {
     await db.query('SELECT 1');
@@ -65,7 +102,7 @@ app.use((err, req, res, next) => {
 
   // Log unhandled internal server errors internally
   if (!isClientError) {
-    console.error('Unhandled Internal Server Error:', err);
+    logger.error('app', `Unhandled Internal Server Error: ${err.message}`, { stack: err.stack });
   }
 
   // Sanitize internal server error messages to prevent leaking stack traces or database details

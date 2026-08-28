@@ -20,7 +20,21 @@ async function generateTenantInvoice(tenantId, customPeriodStart, customPeriodEn
     throw err;
   }
 
-  const subscription = await getOrCreateActiveSubscription(tenantId);
+  // 1. Fetch current subscription for tenant (preferring active or past_due before creating default Free sub)
+  const subQuery = `
+    SELECT s.*, p.name as plan_name, p.monthly_api_limit, p.monthly_token_limit, p.price_cents
+    FROM subscriptions s
+    JOIN plans p ON s.plan_id = p.id
+    WHERE s.tenant_id = $1
+    ORDER BY CASE WHEN s.status = 'active' THEN 1 WHEN s.status = 'past_due' THEN 2 ELSE 3 END, s.created_at DESC
+    LIMIT 1
+  `;
+  const subRes = await db.query(subQuery, [tenantId]);
+  let subscription = subRes.rows[0];
+
+  if (!subscription) {
+    subscription = await getOrCreateActiveSubscription(tenantId);
+  }
 
   const now = new Date();
   const periodStart = customPeriodStart || (subscription.current_period_start
@@ -30,7 +44,7 @@ async function generateTenantInvoice(tenantId, customPeriodStart, customPeriodEn
     ? new Date(subscription.current_period_end)
     : new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999));
 
-  // 1. Query aggregate usage events strictly scoped to tenant_id and billing period bounds
+  // 2. Query aggregate usage events strictly scoped to tenant_id and billing period bounds
   const usageQuery = `
     SELECT
       COUNT(CASE WHEN usage_type = 'API_CALL' THEN 1 END)::bigint as total_api_calls,
@@ -53,7 +67,7 @@ async function generateTenantInvoice(tenantId, customPeriodStart, customPeriodEn
   const totalOutputTokens = Number(usage.total_output_tokens || 0);
   const totalReasoningTokens = Number(usage.total_reasoning_tokens || 0);
 
-  // 2. Derive individual category costs using authoritative pricing calculations from pricingService.js
+  // 3. Derive individual category costs using authoritative pricing calculations from pricingService.js
   const inputAmountCents = calculateTokenCost({ input_tokens: totalInputTokens }).costCents;
   const cachedAmountCents = calculateTokenCost({ cached_tokens: totalCachedTokens }).costCents;
   const outputAmountCents = calculateTokenCost({ output_tokens: totalOutputTokens }).costCents;
