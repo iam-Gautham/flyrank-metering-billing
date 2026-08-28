@@ -268,8 +268,24 @@ async function processWebhookEvent(event) {
     };
   } catch (error) {
     await client.query('ROLLBACK');
-    // Handle PostgreSQL unique violation (code 23505) gracefully for concurrent duplicate webhook delivery
-    if (error.code === '23505') {
+
+    // Handle partial unique index constraint 23505 on idx_single_active_subscription_per_tenant specifically
+    if (error.code === '23505' && error.constraint === 'idx_single_active_subscription_per_tenant') {
+      const subCheck = await db.query(
+        'SELECT status FROM subscriptions WHERE stripe_subscription_id = $1 OR stripe_customer_id = $1 OR id::text = $1 LIMIT 1',
+        [subscriptionIdentifier]
+      );
+      return {
+        success: true,
+        message: 'Event processed, active subscription preserved.',
+        event_id: id,
+        subscription_id: subscriptionIdentifier,
+        status: subCheck.rows[0] ? subCheck.rows[0].status : 'active',
+      };
+    }
+
+    // Handle duplicate provider event ID constraint (code 23505) gracefully
+    if (error.code === '23505' && (error.constraint === 'webhook_events_provider_event_id_key' || error.constraint === 'unique_tenant_idempotency')) {
       const subCheck = await db.query(
         'SELECT status FROM subscriptions WHERE stripe_subscription_id = $1 OR stripe_customer_id = $1 OR id::text = $1 LIMIT 1',
         [subscriptionIdentifier]

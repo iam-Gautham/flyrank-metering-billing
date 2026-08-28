@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 CREATE INDEX IF NOT EXISTS idx_subscriptions_stripe_sub_id ON subscriptions(stripe_subscription_id);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_stripe_cust_id ON subscriptions(stripe_customer_id);
 
+-- Enforce single active subscription per tenant at the database schema level
+CREATE UNIQUE INDEX IF NOT EXISTS idx_single_active_subscription_per_tenant ON subscriptions(tenant_id) WHERE status = 'active';
+
 -- Usage Events Table
 CREATE TABLE IF NOT EXISTS usage_events (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

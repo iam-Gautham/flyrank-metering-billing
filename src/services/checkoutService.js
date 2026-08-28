@@ -187,6 +187,29 @@ async function createSubscriptionCheckout({ tenantId, planName, idempotencyKey }
     };
   } catch (error) {
     await client.query('ROLLBACK');
+
+    // Handle partial unique index constraint 23505 on idx_single_active_subscription_per_tenant specifically
+    if (error.code === '23505' && error.constraint === 'idx_single_active_subscription_per_tenant') {
+      const activeSubRes = await db.query(
+        `SELECT s.*, p.name as plan_name
+         FROM subscriptions s
+         JOIN plans p ON s.plan_id = p.id
+         WHERE s.tenant_id = $1 AND s.status = 'active' LIMIT 1`,
+        [tenantId]
+      );
+      const sub = activeSubRes.rows[0];
+      return {
+        success: true,
+        checkout: {
+          provider: provider.name,
+          session_id: session ? session.id : 'fake_checkout_session',
+          subscription_id: sub ? sub.stripe_subscription_id : (session ? session.subscriptionId : 'fake_sub'),
+          plan: sub ? sub.plan_name : targetPlan.name,
+          status: sub ? sub.status : 'active',
+        },
+      };
+    }
+
     // Handle unique constraint 23505 on formattedKey for concurrent duplicate checkout requests
     if (error.code === '23505' && formattedKey) {
       const activeSubRes = await db.query(

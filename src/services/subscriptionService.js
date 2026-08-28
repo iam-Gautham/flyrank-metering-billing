@@ -4,6 +4,7 @@ const { getPaymentProvider } = require('./paymentProvider');
 /**
  * Gets or creates an active subscription for the given tenant.
  * Accepts a custom database query function or client for transaction compatibility.
+ * Handles idx_single_active_subscription_per_tenant (23505) concurrency race gracefully.
  * 
  * @param {string} tenantId
  * @param {Object} [dbClient] - Optional pg pool client or db module
@@ -11,7 +12,7 @@ const { getPaymentProvider } = require('./paymentProvider');
  */
 async function getOrCreateActiveSubscription(tenantId, dbClient = db, forUpdate = false) {
   const lockClause = forUpdate ? 'FOR UPDATE' : '';
-  
+
   // 1. Query active subscription joined with plan limits
   const selectQuery = `
     SELECT s.*, p.name as plan_name, p.monthly_api_limit, p.monthly_token_limit, p.price_cents
@@ -63,21 +64,32 @@ async function getOrCreateActiveSubscription(tenantId, dbClient = db, forUpdate 
     RETURNING *
   `;
 
-  const insertResult = await dbClient.query(insertQuery, [
-    tenantId,
-    freePlan.id,
-    periodStart,
-    periodEnd,
-  ]);
+  try {
+    const insertResult = await dbClient.query(insertQuery, [
+      tenantId,
+      freePlan.id,
+      periodStart,
+      periodEnd,
+    ]);
 
-  const newSub = insertResult.rows[0];
-  return {
-    ...newSub,
-    plan_name: freePlan.name,
-    monthly_api_limit: freePlan.monthly_api_limit,
-    monthly_token_limit: freePlan.monthly_token_limit,
-    price_cents: freePlan.price_cents,
-  };
+    const newSub = insertResult.rows[0];
+    return {
+      ...newSub,
+      plan_name: freePlan.name,
+      monthly_api_limit: freePlan.monthly_api_limit,
+      monthly_token_limit: freePlan.monthly_token_limit,
+      price_cents: freePlan.price_cents,
+    };
+  } catch (error) {
+    // Handle concurrent partial unique index race condition gracefully
+    if (error.code === '23505' && error.constraint === 'idx_single_active_subscription_per_tenant') {
+      const recheck = await dbClient.query(selectQuery, [tenantId]);
+      if (recheck.rows.length > 0) {
+        return recheck.rows[0];
+      }
+    }
+    throw error;
+  }
 }
 
 /**

@@ -65,13 +65,13 @@ test('Billing Hardening - single active subscription invariant enforced under mu
   const freePlanId = freePlanRes.rows[0].id;
   const proPlanId = proPlanRes.rows[0].id;
 
-  // Insert 2 active subscription rows manually for the tenant (simulating pre-existing data conflict)
+  // Insert 2 subscription rows (1 active, 1 canceled) for the tenant to simulate pre-existing subscription history
   await db.query(
     "INSERT INTO subscriptions (tenant_id, plan_id, status, stripe_subscription_id) VALUES ($1, $2, 'active', 'sub_conflict_1')",
     [tenant.id, freePlanId]
   );
   await db.query(
-    "INSERT INTO subscriptions (tenant_id, plan_id, status, stripe_subscription_id) VALUES ($1, $2, 'active', 'sub_conflict_2')",
+    "INSERT INTO subscriptions (tenant_id, plan_id, status, stripe_subscription_id) VALUES ($1, $2, 'canceled', 'sub_conflict_2')",
     [tenant.id, proPlanId]
   );
 
