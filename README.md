@@ -63,7 +63,14 @@ npm run db:seed
 
 > **Monetary Arithmetic Note:** All calculations use pure integer nano-cents arithmetic ($1 \text{ USD cent} = 1,000,000 \text{ nano-cents}$) rounded to the nearest cent without floating-point math. Stored in `usage_events.cost_cents`.
 
-### 4. Environment Variables
+### 4. Payment Provider Architecture (Zero-Cost Local Mode)
+
+Development uses a local **Fake Payment Provider** (`PAYMENT_PROVIDER=fake`):
+- **Cost**: ₹0 / $0 (100% free local development).
+- **Network & Account**: Makes zero external network requests, requires no payment provider account, and requires no API keys or credit cards.
+- **Provider Abstraction**: All billing services depend on `src/services/paymentProvider.js`, allowing real production payment gateways to be plugged in later behind the same interface.
+
+### 5. Environment Variables
 
 Copy `.env.example` to `.env`:
 
