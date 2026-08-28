@@ -29,7 +29,15 @@ To view database logs:
 docker compose logs -f postgres
 ```
 
-### 2. Environment Variables
+### 2. Database Migrations
+
+To apply the database schema to PostgreSQL:
+
+```bash
+npm run db:migrate
+```
+
+### 3. Environment Variables
 
 Copy `.env.example` to `.env`:
 
@@ -37,7 +45,7 @@ Copy `.env.example` to `.env`:
 cp .env.example .env
 ```
 
-### 3. Application Setup
+### 4. Application Setup
 
 Install dependencies:
 
