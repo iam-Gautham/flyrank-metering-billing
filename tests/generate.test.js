@@ -71,6 +71,11 @@ test('POST /api/v1/generate - basic successful request, idempotent duplicate, an
   assert.strictEqual(res1.body.success, true);
   assert.strictEqual(res1.body.usage.total_tokens, 180);
 
+  // DB Cost check for key1 (136,500 nano-cents rounds to 0 cents)
+  const event1Res = await db.query('SELECT cost_cents, input_tokens, cached_tokens, output_tokens, reasoning_tokens FROM usage_events WHERE idempotency_key = $1', [key1]);
+  assert.strictEqual(event1Res.rows.length, 1);
+  assert.strictEqual(event1Res.rows[0].cost_cents, 0);
+
   // Duplicate request
   const res2 = await request(app)
     .post('/api/v1/generate')

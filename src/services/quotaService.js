@@ -1,6 +1,7 @@
 const db = require('../db');
 const { getOrCreateActiveSubscription } = require('./subscriptionService');
 const { findUsageEvent } = require('./usageService');
+const { calculateTokenCost } = require('./pricingService');
 
 class QuotaExceededError extends Error {
   constructor(quotaType, limit, currentUsage, requestedAmount) {
@@ -27,7 +28,7 @@ async function checkAndRecordUsageTransaction({
   cachedTokens = 0,
   outputTokens = 0,
   reasoningTokens = 0,
-  costCents = 0,
+  costCents,
 }) {
   const client = await db.pool.connect();
   try {
@@ -68,7 +69,17 @@ async function checkAndRecordUsageTransaction({
       throw new QuotaExceededError('AI_TOKENS', subscription.monthly_token_limit, currentTokens, quantity);
     }
 
-    // 5. Insert Usage Event
+    // 5. Calculate AI Token Cost using integer monetary arithmetic if costCents not explicitly supplied
+    const finalCostCents = typeof costCents === 'number'
+      ? costCents
+      : calculateTokenCost({
+          input_tokens: inputTokens,
+          cached_tokens: cachedTokens,
+          output_tokens: outputTokens,
+          reasoning_tokens: reasoningTokens,
+        }).costCents;
+
+    // 6. Insert Usage Event
     const insertQuery = `
       INSERT INTO usage_events (
         tenant_id,
@@ -92,7 +103,7 @@ async function checkAndRecordUsageTransaction({
       cachedTokens,
       outputTokens,
       reasoningTokens,
-      costCents,
+      finalCostCents,
     ];
 
     const insertResult = await client.query(insertQuery, insertValues);

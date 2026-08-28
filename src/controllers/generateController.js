@@ -73,7 +73,6 @@ async function handleGenerate(req, res, next) {
       cachedTokens: cached_tokens,
       outputTokens: output_tokens,
       reasoningTokens: reasoning_tokens,
-      costCents: 0,
     });
 
     // 7. Return success response

@@ -55,6 +55,14 @@ npm run db:seed
   - Token Limit: 5,000,000 tokens/month
   - Price: $29.00 (`2900` cents)
 
+**AI Token Pricing Rates (Development Rates):**
+- **Input Tokens**: $3.00 per 1M tokens (300 nano-cents / token)
+- **Cached Input Tokens**: $0.75 per 1M tokens (75 nano-cents / token — 75% discount)
+- **Output Tokens**: $15.00 per 1M tokens (1,500 nano-cents / token)
+- **Reasoning Tokens**: $30.00 per 1M tokens (3,000 nano-cents / token)
+
+> **Monetary Arithmetic Note:** All calculations use pure integer nano-cents arithmetic ($1 \text{ USD cent} = 1,000,000 \text{ nano-cents}$) rounded to the nearest cent without floating-point math. Stored in `usage_events.cost_cents`.
+
 ### 4. Environment Variables
 
 Copy `.env.example` to `.env`:
