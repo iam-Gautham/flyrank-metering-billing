@@ -16,6 +16,13 @@ async function handleCheckout(req, res, next) {
       });
     }
 
+    if (plan_name.length > 100) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'plan_name exceeds maximum length of 100 characters.',
+      });
+    }
+
     const rawIdempotencyKey = req.get('Idempotency-Key') || req.headers['idempotency-key'];
     const idempotencyKey = rawIdempotencyKey && typeof rawIdempotencyKey === 'string' ? rawIdempotencyKey.trim() : null;
 

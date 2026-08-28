@@ -245,7 +245,7 @@ curl -X POST http://localhost:3000/api/v1/webhooks/payment \
 }
 ```
 
-> **Production Billing Engine Note:** Powered by the local fake payment provider (`PAYMENT_PROVIDER=fake`), this engine costs ₹0, requires no external credentials, and guarantees a complete billing state machine (`active`, `past_due`, `canceled`), payment recovery, renewal period updates, out-of-order event protection, and strict tenant-subscription isolation.
+> **Production Billing Engine Note:** Powered by the local fake payment provider (`PAYMENT_PROVIDER=fake`), this engine costs ₹0, requires no external credentials, and guarantees a complete billing state machine (`active`, `past_due`, `canceled`), payment recovery, renewal period updates, out-of-order event protection, strict tenant-subscription isolation, sanitized internal 500 error responses, and HTTP 400 JSON syntax error handling.
 
 ### Example Request (`POST /api/v1/generate`)
 
