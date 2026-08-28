@@ -49,6 +49,9 @@ async function getOrCreateActiveSubscription(tenantId, dbClient = db, forUpdate 
   const periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
   const periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
 
+  // Deactivate any existing subscriptions for the tenant to guarantee single active subscription invariant
+  await dbClient.query("UPDATE subscriptions SET status = 'canceled' WHERE tenant_id = $1 AND status = 'active'", [tenantId]);
+
   const insertQuery = `
     INSERT INTO subscriptions (
       tenant_id,
@@ -105,6 +108,16 @@ async function getTenantSubscriptionDetails(tenantId) {
   const sub = result.rows[0];
   const provider = getPaymentProvider();
 
+  const now = new Date();
+  let periodStart = sub.current_period_start ? new Date(sub.current_period_start) : new Date(now.getFullYear(), now.getMonth(), 1);
+  let periodEnd = sub.current_period_end ? new Date(sub.current_period_end) : new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+
+  // If stored billing period has expired, automatically roll forward to current calendar month
+  if (periodEnd < now) {
+    periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+  }
+
   return {
     tenant: {
       id: sub.tenant_id,
@@ -122,8 +135,8 @@ async function getTenantSubscriptionDetails(tenantId) {
         monthly_token_limit: sub.monthly_token_limit,
       },
       status: sub.status,
-      current_period_start: sub.current_period_start ? new Date(sub.current_period_start).toISOString() : null,
-      current_period_end: sub.current_period_end ? new Date(sub.current_period_end).toISOString() : null,
+      current_period_start: periodStart.toISOString(),
+      current_period_end: periodEnd.toISOString(),
     },
   };
 }
@@ -177,6 +190,15 @@ async function cancelTenantActiveSubscription(tenantId) {
 
     await client.query('COMMIT');
 
+    const now = new Date();
+    let periodStart = updatedSub.current_period_start ? new Date(updatedSub.current_period_start) : new Date(now.getFullYear(), now.getMonth(), 1);
+    let periodEnd = updatedSub.current_period_end ? new Date(updatedSub.current_period_end) : new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+
+    if (periodEnd < now) {
+      periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+    }
+
     return {
       success: true,
       message: 'Subscription cancelled successfully.',
@@ -187,8 +209,8 @@ async function cancelTenantActiveSubscription(tenantId) {
         status: updatedSub.status,
         customer_id: updatedSub.stripe_customer_id,
         subscription_id: updatedSub.stripe_subscription_id,
-        current_period_start: updatedSub.current_period_start ? new Date(updatedSub.current_period_start).toISOString() : null,
-        current_period_end: updatedSub.current_period_end ? new Date(updatedSub.current_period_end).toISOString() : null,
+        current_period_start: periodStart.toISOString(),
+        current_period_end: periodEnd.toISOString(),
       },
     };
   } catch (error) {

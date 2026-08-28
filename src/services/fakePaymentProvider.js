@@ -96,17 +96,82 @@ class FakePaymentProvider {
   /**
    * Generates a deterministic simulated lifecycle event for testing.
    */
-  generateLifecycleEvent({ id, type, subscriptionId, status, planName }) {
+  generateLifecycleEvent({ id, type, subscriptionId, status, planName, created }) {
     const eventId = id || `fake_evt_${crypto.randomBytes(8).toString('hex')}`;
     return {
       id: eventId,
       type: type || 'subscription.updated',
+      created: created || Math.floor(Date.now() / 1000),
       data: {
         subscription_id: subscriptionId,
         status: status || 'active',
         plan_name: planName,
       },
     };
+  }
+
+  /**
+   * Generates a deterministic simulated invoice / payment event for testing.
+   */
+  generateInvoiceEvent({ id, type, subscriptionId, customerId, status, periodStart, periodEnd, created }) {
+    const eventId = id || `fake_evt_inv_${crypto.randomBytes(8).toString('hex')}`;
+    return {
+      id: eventId,
+      type: type || 'invoice.payment_succeeded',
+      created: created || Math.floor(Date.now() / 1000),
+      data: {
+        subscription_id: subscriptionId,
+        customer_id: customerId,
+        status: status || 'paid',
+        current_period_start: periodStart,
+        current_period_end: periodEnd,
+      },
+    };
+  }
+
+  /**
+   * Generates a deterministic simulated subscription renewal event.
+   */
+  generateRenewalEvent({ id, subscriptionId, periodStart, periodEnd, created }) {
+    return this.generateInvoiceEvent({
+      id: id || `fake_evt_renew_${crypto.randomBytes(8).toString('hex')}`,
+      type: 'invoice.payment_succeeded',
+      subscriptionId,
+      status: 'paid',
+      periodStart,
+      periodEnd,
+      created,
+    });
+  }
+
+  /**
+   * Generates a deterministic simulated payment failure event.
+   */
+  generatePaymentFailureEvent({ id, subscriptionId, customerId, created }) {
+    return this.generateInvoiceEvent({
+      id: id || `fake_evt_fail_${crypto.randomBytes(8).toString('hex')}`,
+      type: 'invoice.payment_failed',
+      subscriptionId,
+      customerId,
+      status: 'uncollectible',
+      created,
+    });
+  }
+
+  /**
+   * Generates a deterministic simulated payment recovery event.
+   */
+  generatePaymentRecoveryEvent({ id, subscriptionId, customerId, periodStart, periodEnd, created }) {
+    return this.generateInvoiceEvent({
+      id: id || `fake_evt_recovery_${crypto.randomBytes(8).toString('hex')}`,
+      type: 'invoice.payment_succeeded',
+      subscriptionId,
+      customerId,
+      status: 'paid',
+      periodStart,
+      periodEnd,
+      created,
+    });
   }
 }
 

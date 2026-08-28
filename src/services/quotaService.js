@@ -38,12 +38,18 @@ async function checkAndRecordUsageTransaction({
     const subscription = await getOrCreateActiveSubscription(tenantId, client, true);
 
     const now = new Date();
-    const periodStart = subscription.current_period_start
+    let periodStart = subscription.current_period_start
       ? new Date(subscription.current_period_start)
       : new Date(now.getFullYear(), now.getMonth(), 1);
-    const periodEnd = subscription.current_period_end
+    let periodEnd = subscription.current_period_end
       ? new Date(subscription.current_period_end)
       : new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+
+    // If stored billing period has expired, automatically roll forward to current calendar month
+    if (periodEnd < now) {
+      periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+    }
 
     // 2. Query total API calls used (usage_type = 'API_CALL')
     const apiCallsQuery = `

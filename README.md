@@ -2,6 +2,43 @@
 
 Backend service for FlyRank usage metering and billing infrastructure.
 
+```text
++-----------------------------------------------------------------------------------+
+|                                 CLIENT APPLICATIONS                               |
++-----------------------------------------------------------------------------------+
+        |                                       |                              |
+ (POST /generate)                       (GET /usage)                    (POST /checkout)
+ [Idempotency-Key]                      [Billing Period]                [Plan Upgrades]
+        |                                       |                              |
+        v                                       v                              v
++-----------------------------------------------------------------------------------+
+|                             EXPRESS API / ROUTER LAYER                            |
++-----------------------------------------------------------------------------------+
+        |                                       |                              |
+        v                                       v                              v
++-----------------------+               +----------------------+      +----------------------+
+|  generateController   |               |   tenantUsageService |      |   checkoutService    |
++-----------------------+               +----------------------+      +----------------------+
+        |                                       |                              |
+        v                                       v                              v
++-----------------------+               +----------------------+      +----------------------+
+|     quotaService      |               |     pricingService   |      |   webhookService     |
++-----------------------+               +----------------------+      +----------------------+
+        |                                       |                              |
+        +---------------------------+-----------+                              |
+                                    |                                          v
+                                    v                                 +----------------------+
+                            +---------------+                         | FakePaymentProvider  |
+                            | PostgreSQL 16 |                         | (Local ₹0 / $0 Mode) |
+                            +---------------+                         +----------------------+
+                            | - tenants     |                                  ^
+                            | - plans       |                                  |
+                            | - subscriptions                                  |
+                            | - usage_events (API_CALL + AI_TOKENS)            |
+                            | - webhook_events                                 |
+                            +--------------------------------------------------+
+```
+
 ## Prerequisites
 
 - Node.js (v18+)
@@ -70,6 +107,15 @@ Development uses a local **Fake Payment Provider** (`PAYMENT_PROVIDER=fake`):
 - **Network & Account**: Makes zero external network requests, requires no payment provider account, and requires no API keys or credit cards.
 - **Provider Abstraction**: All billing services depend on `src/services/paymentProvider.js`, allowing real production payment gateways to be plugged in later behind the same interface.
 
+#### Mapping Fake Provider to Production Payment Gateway (Stripe Mapping)
+
+| Fake Provider Method | Real Stripe Gateway Mapping | Description |
+| :--- | :--- | :--- |
+| `createCheckoutSession(...)` | `stripe.checkout.sessions.create({...})` | Generates customer ID and hosted checkout session URL. |
+| `getSubscription(id)` | `stripe.subscriptions.retrieve(id)` | Retrieves authoritative subscription state and billing period bounds. |
+| `cancelSubscription(id)` | `stripe.subscriptions.cancel(id)` | Cancels active subscription at period end or immediately. |
+| `processEvent(event)` | `stripe.webhooks.constructEvent(...)` | Verifies Stripe cryptographic signature (`stripe-signature` header). |
+
 ### 5. Environment Variables
 
 Copy `.env.example` to `.env`:
@@ -78,7 +124,7 @@ Copy `.env.example` to `.env`:
 cp .env.example .env
 ```
 
-### 4. Application Setup
+### 6. Application Setup & Testing
 
 Install dependencies:
 
@@ -96,6 +142,12 @@ Start the application in production mode:
 
 ```bash
 npm start
+```
+
+Run full automated test suite:
+
+```bash
+npm test
 ```
 
 ## API Endpoints
@@ -193,34 +245,7 @@ curl -X POST http://localhost:3000/api/v1/webhooks/payment \
 }
 ```
 
-> **Simulated Webhook Note:** Powered by the local fake payment provider (`PAYMENT_PROVIDER=fake`), this endpoint requires no webhook signing secret, no external account or card, costs ₹0, and processes events with 100% database-enforced transaction safety and idempotency.
-
-### Example Request (`POST /api/v1/subscription/checkout`)
-
-```bash
-curl -X POST http://localhost:3000/api/v1/subscription/checkout \
-  -H "Content-Type: application/json" \
-  -d '{
-    "plan_name": "Pro"
-  }'
-```
-
-### Example Response (`200 OK`)
-
-```json
-{
-  "success": true,
-  "checkout": {
-    "provider": "fake",
-    "session_id": "fake_checkout_8a2b3c4d5e6f7a8b",
-    "subscription_id": "fake_sub_1a2b3c4d5e6f7a8b",
-    "plan": "Pro",
-    "status": "active"
-  }
-}
-```
-
-> **Simulated Zero-Cost Checkout Note:** This checkout operation uses the local fake payment provider (`PAYMENT_PROVIDER=fake`), costs ₹0, and requires no card or payment gateway credentials.
+> **Production Billing Engine Note:** Powered by the local fake payment provider (`PAYMENT_PROVIDER=fake`), this engine costs ₹0, requires no external credentials, and guarantees a complete billing state machine (`active`, `past_due`, `canceled`), payment recovery, renewal period updates, out-of-order event protection, and strict tenant-subscription isolation.
 
 ### Example Request (`POST /api/v1/generate`)
 
@@ -295,7 +320,7 @@ curl http://localhost:3000/api/v1/usage
 ```json
 {
   "error": "Too Many Requests",
-  "quota_type": "API_CALLS",
+  "quota_type":"API_CALLS",
   "message": "Monthly API call limit exceeded. Limit: 1000, Current: 1000, Requested: 1."
 }
 ```

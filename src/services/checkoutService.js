@@ -4,6 +4,7 @@ const { getPaymentProvider } = require('./paymentProvider');
 /**
  * Creates a subscription checkout session using the payment provider abstraction
  * and updates/creates the active subscription record in PostgreSQL.
+ * Ensures single active subscription invariant per tenant.
  * 
  * @param {Object} params
  * @param {string} params.tenantId
@@ -50,7 +51,7 @@ async function createSubscriptionCheckout({ tenantId, planName }) {
 
     let subscriptionRow;
     if (existingSubRes.rows.length > 0) {
-      // Update existing subscription to switch plan and populate provider IDs
+      // Update existing active subscription to switch plan and populate provider IDs
       const updateQuery = `
         UPDATE subscriptions
         SET plan_id = $1,
@@ -95,6 +96,12 @@ async function createSubscriptionCheckout({ tenantId, planName }) {
       ]);
       subscriptionRow = insertRes.rows[0];
     }
+
+    // Deactivate any other active subscription rows to enforce single active subscription invariant
+    await client.query(
+      "UPDATE subscriptions SET status = 'canceled' WHERE tenant_id = $1 AND id != $2 AND status = 'active'",
+      [tenantId, subscriptionRow.id]
+    );
 
     await client.query('COMMIT');
 

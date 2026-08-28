@@ -5,12 +5,14 @@ const app = require('../src/app');
 const db = require('../src/db');
 const { getDemoTenant } = require('../src/services/tenantService');
 const { getOrCreateActiveSubscription } = require('../src/services/subscriptionService');
+const { processWebhookEvent } = require('../src/services/webhookService');
 
 after(async () => {
   await db.pool.end();
 });
 
 beforeEach(async () => {
+  await db.query('DELETE FROM webhook_events');
   await db.query('DELETE FROM usage_events');
   await db.query('DELETE FROM subscriptions');
 });
@@ -201,6 +203,132 @@ test('POST /api/v1/webhooks/payment - subscription.cancelled event sets status t
   assert.strictEqual(res2.body.idempotent, true);
   const dbSubAfterDup = await db.query('SELECT * FROM subscriptions WHERE id = $1', [sub.id]);
   assert.strictEqual(dbSubAfterDup.rows[0].status, 'canceled');
+});
+
+test('POST /api/v1/webhooks/payment - concurrent duplicate webhook delivery protection', async () => {
+  const tenant = await getDemoTenant();
+  const sub = await getOrCreateActiveSubscription(tenant.id);
+
+  const providerSubId = 'fake_sub_concurrent_test_001';
+  await db.query('UPDATE subscriptions SET stripe_subscription_id = $1 WHERE id = $2', [providerSubId, sub.id]);
+
+  const sameEvent = {
+    id: 'evt_concurrent_001',
+    type: 'subscription.updated',
+    data: {
+      subscription_id: providerSubId,
+      status: 'active',
+      plan_name: 'Pro',
+    },
+  };
+
+  // Fire concurrent requests simultaneously via Promise.all
+  const [res1, res2] = await Promise.all([
+    request(app).post('/api/v1/webhooks/payment').send(sameEvent),
+    request(app).post('/api/v1/webhooks/payment').send(sameEvent),
+  ]);
+
+  assert.strictEqual(res1.status, 200);
+  assert.strictEqual(res2.status, 200);
+
+  // Exactly 1 webhook event marker stored in usage_events
+  const markerCount = await db.query("SELECT COUNT(*) FROM usage_events WHERE idempotency_key = 'webhook:evt_concurrent_001'");
+  assert.strictEqual(parseInt(markerCount.rows[0].count, 10), 1);
+});
+
+test('POST /api/v1/webhooks/payment - out-of-order and stale event protection', async () => {
+  const tenant = await getDemoTenant();
+  const sub = await getOrCreateActiveSubscription(tenant.id);
+
+  const providerSubId = 'fake_sub_ooo_test_001';
+  await db.query('UPDATE subscriptions SET stripe_subscription_id = $1 WHERE id = $2', [providerSubId, sub.id]);
+
+  const baseTime = Math.floor(Date.now() / 1000);
+
+  // 1. Process NEWER event (created = baseTime + 200) updating plan to Pro
+  const newerEvent = {
+    id: 'evt_newer_200',
+    type: 'subscription.updated',
+    created: baseTime + 200,
+    data: {
+      subscription_id: providerSubId,
+      status: 'active',
+      plan_name: 'Pro',
+    },
+  };
+
+  const resNewer = await request(app)
+    .post('/api/v1/webhooks/payment')
+    .send(newerEvent)
+    .expect(200);
+
+  assert.strictEqual(resNewer.body.success, true);
+  assert.strictEqual(resNewer.body.status, 'active');
+
+  // Verify DB plan is Pro
+  const dbSub1 = await db.query(
+    "SELECT s.*, p.name as plan_name FROM subscriptions s JOIN plans p ON s.plan_id = p.id WHERE s.id = $1",
+    [sub.id]
+  );
+  assert.strictEqual(dbSub1.rows[0].plan_name, 'Pro');
+
+  // 2. Process STALE / OLDER event (created = baseTime + 100) attempting to set plan back to Free
+  const olderEvent = {
+    id: 'evt_older_100',
+    type: 'subscription.updated',
+    created: baseTime + 100,
+    data: {
+      subscription_id: providerSubId,
+      status: 'active',
+      plan_name: 'Free',
+    },
+  };
+
+  const resOlder = await request(app)
+    .post('/api/v1/webhooks/payment')
+    .send(olderEvent)
+    .expect(200);
+
+  assert.strictEqual(resOlder.body.stale, true);
+  assert.match(resOlder.body.message, /stale\/out-of-order/i);
+
+  // Verify PostgreSQL subscription plan remains 'Pro' (unmodified by stale event)
+  const dbSub2 = await db.query(
+    "SELECT s.*, p.name as plan_name FROM subscriptions s JOIN plans p ON s.plan_id = p.id WHERE s.id = $1",
+    [sub.id]
+  );
+  assert.strictEqual(dbSub2.rows[0].plan_name, 'Pro');
+});
+
+test('POST /api/v1/webhooks/payment - transaction rollback safety on processing failure', async () => {
+  const tenant = await getDemoTenant();
+  const sub = await getOrCreateActiveSubscription(tenant.id);
+
+  const providerSubId = 'fake_sub_rollback_test_001';
+  await db.query('UPDATE subscriptions SET stripe_subscription_id = $1 WHERE id = $2', [providerSubId, sub.id]);
+
+  const countBefore = await db.query('SELECT COUNT(*) FROM usage_events');
+
+  // Send webhook targeting valid subscription but specifying non-existent plan_name
+  const invalidPlanEvent = {
+    id: 'evt_invalid_plan_001',
+    type: 'subscription.updated',
+    data: {
+      subscription_id: providerSubId,
+      plan_name: 'NonExistentPlanName123',
+    },
+  };
+
+  const res = await request(app)
+    .post('/api/v1/webhooks/payment')
+    .send(invalidPlanEvent)
+    .expect(400);
+
+  assert.strictEqual(res.body.error, 'Bad Request');
+
+  // Verify database count is unchanged (clean transaction rollback)
+  const countAfter = await db.query('SELECT COUNT(*) FROM usage_events');
+  assert.strictEqual(countAfter.rows[0].count, countBefore.rows[0].count);
 });
 
 test('POST /api/v1/webhooks/payment - tenant/subscription-scoped isolation guarantee', async () => {
