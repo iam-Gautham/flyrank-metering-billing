@@ -245,18 +245,54 @@ curl -X POST http://localhost:3000/api/v1/webhooks/payment \
 }
 ```
 
-> **Production Billing Engine Note:** Powered by the local fake payment provider (`PAYMENT_PROVIDER=fake`), this engine costs ₹0, requires no external credentials, and guarantees a complete billing state machine (`active`, `past_due`, `canceled`), payment recovery, renewal period updates, out-of-order event protection, strict tenant-subscription isolation, sanitized internal 500 error responses, database-schema-enforced single active subscription invariant (`idx_single_active_subscription_per_tenant`), graceful shutdown (`SIGTERM`/`SIGINT`), and standardized container health check probes (`GET /health`).
+> **Production Billing Engine Note:** Powered by the local fake payment provider (`PAYMENT_PROVIDER=fake`), this engine costs ₹0, requires no external credentials, and guarantees a complete billing state machine (`active`, `past_due`, `canceled`), payment recovery, renewal period updates, out-of-order event protection, strict tenant-subscription isolation, sanitized internal 500 error responses, database-schema-enforced single active subscription invariant (`idx_single_active_subscription_per_tenant`), graceful shutdown (`SIGTERM`/`SIGINT`), container health check probes (`GET /health`), and itemized monthly billing invoices (`GET /api/v1/invoices/current`).
 
-### Health Check Endpoint (`GET /health`)
+### Current Monthly Invoice Statement Endpoint (`GET /api/v1/invoices/current`)
 
 ```bash
-curl http://localhost:3000/health
+curl http://localhost:3000/api/v1/invoices/current
 ```
 
 ```json
 {
-  "status": "ok",
-  "database": "connected"
+  "invoice": {
+    "id": "inv_32e8849a_202608",
+    "tenant_id": "32e8849a-6f0a-4639-9c57-30da0f98ca6f",
+    "status": "paid",
+    "currency": "USD",
+    "plan_name": "Pro",
+    "period_start": "2026-07-31T18:30:00.000Z",
+    "period_end": "2026-08-31T18:29:59.999Z",
+    "subtotal_cents": 3350,
+    "tax_cents": 0,
+    "total_cents": 3350,
+    "line_items": [
+      {
+        "description": "Base Subscription Fee - Pro Plan",
+        "quantity": 1,
+        "unit_price_cents": 2900,
+        "amount_cents": 2900
+      },
+      {
+        "description": "API Call Requests",
+        "quantity": 1,
+        "unit_price_cents": 0,
+        "amount_cents": 0
+      },
+      {
+        "description": "Input AI Tokens ($3.00 / 1M)",
+        "quantity": 1000000,
+        "rate_per_million_dollars": 3,
+        "amount_cents": 300
+      },
+      {
+        "description": "Output AI Tokens ($15.00 / 1M)",
+        "quantity": 100000,
+        "rate_per_million_dollars": 15,
+        "amount_cents": 150
+      }
+    ]
+  }
 }
 ```
 

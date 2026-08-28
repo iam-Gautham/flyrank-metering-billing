@@ -14,6 +14,29 @@ async function getDemoTenant() {
   return result.rows[0];
 }
 
+/**
+ * Resolves tenant context from request header `x-tenant-id` or falls back to Demo Tenant.
+ * Throws HTTP 404 error if an explicit x-tenant-id header is provided but not found in DB.
+ *
+ * @param {Object} [req]
+ * @returns {Promise<Object>}
+ */
+async function resolveTenant(req) {
+  const tenantIdHeader = req && req.headers ? req.headers['x-tenant-id'] : null;
+  if (tenantIdHeader) {
+    const res = await db.query('SELECT id, name FROM tenants WHERE id = $1', [tenantIdHeader]);
+    if (res.rows.length === 0) {
+      const error = new Error(`Tenant '${tenantIdHeader}' not found.`);
+      error.statusCode = 404;
+      error.userFacing = true;
+      throw error;
+    }
+    return res.rows[0];
+  }
+  return getDemoTenant();
+}
+
 module.exports = {
   getDemoTenant,
+  resolveTenant,
 };
