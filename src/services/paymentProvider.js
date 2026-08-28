@@ -1,4 +1,5 @@
 const FakePaymentProvider = require('./fakePaymentProvider');
+const logger = require('../utils/logger');
 
 /**
  * Factory function to retrieve the configured payment provider instance.
@@ -13,7 +14,7 @@ function getPaymentProvider() {
     case 'fake':
       return new FakePaymentProvider();
     default:
-      console.warn(`PaymentProvider: Unknown PAYMENT_PROVIDER "${providerType}". Falling back to FakePaymentProvider.`);
+      logger.warn('paymentProvider', `Unknown PAYMENT_PROVIDER "${providerType}". Falling back to FakePaymentProvider.`);
       return new FakePaymentProvider();
   }
 }

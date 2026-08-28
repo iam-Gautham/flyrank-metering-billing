@@ -1,5 +1,6 @@
 const db = require('../db');
 const { getPaymentProvider } = require('./paymentProvider');
+const logger = require('../utils/logger');
 
 /**
  * Gets or creates an active subscription for the given tenant.
@@ -189,7 +190,7 @@ async function cancelTenantActiveSubscription(tenantId) {
       try {
         await provider.cancelSubscription(sub.stripe_subscription_id);
       } catch (providerError) {
-        console.warn(`Payment provider cancelSubscription warning: ${providerError.message}`);
+        logger.warn('subscriptionService', `Payment provider cancelSubscription warning: ${providerError.message}`);
       }
     }
 
