@@ -4,14 +4,15 @@ const { getPaymentProvider } = require('./paymentProvider');
 /**
  * Creates a subscription checkout session using the payment provider abstraction
  * and updates/creates the active subscription record in PostgreSQL.
- * Ensures single active subscription invariant per tenant.
+ * Supports Idempotency-Key header processing and guarantees single active subscription invariant.
  * 
  * @param {Object} params
  * @param {string} params.tenantId
  * @param {string} params.planName
+ * @param {string} [params.idempotencyKey]
  * @returns {Promise<Object>}
  */
-async function createSubscriptionCheckout({ tenantId, planName }) {
+async function createSubscriptionCheckout({ tenantId, planName, idempotencyKey }) {
   // 1. Fetch target plan from database
   const planResult = await db.query('SELECT * FROM plans WHERE name = $1 LIMIT 1', [planName]);
   if (planResult.rows.length === 0) {
@@ -20,9 +21,39 @@ async function createSubscriptionCheckout({ tenantId, planName }) {
     throw error;
   }
   const targetPlan = planResult.rows[0];
-
-  // 2. Obtain payment provider instance via abstraction
   const provider = getPaymentProvider();
+
+  const formattedKey = idempotencyKey ? `checkout:${idempotencyKey}` : null;
+
+  // 2. Pre-check idempotency key if provided
+  if (formattedKey) {
+    const existingMarker = await db.query(
+      'SELECT id FROM usage_events WHERE tenant_id = $1 AND idempotency_key = $2 LIMIT 1',
+      [tenantId, formattedKey]
+    );
+
+    if (existingMarker.rows.length > 0) {
+      const activeSubRes = await db.query(
+        `SELECT s.*, p.name as plan_name
+         FROM subscriptions s
+         JOIN plans p ON s.plan_id = p.id
+         WHERE s.tenant_id = $1 AND s.status = 'active' LIMIT 1`,
+        [tenantId]
+      );
+      const sub = activeSubRes.rows[0];
+      return {
+        success: true,
+        checkout: {
+          provider: provider.name,
+          session_id: `fake_checkout_${idempotencyKey.slice(0, 16)}`,
+          subscription_id: sub ? sub.stripe_subscription_id : 'fake_sub_cached',
+          plan: sub ? sub.plan_name : targetPlan.name,
+          status: sub ? sub.status : 'active',
+        },
+        idempotent: true,
+      };
+    }
+  }
 
   // 3. Create checkout session using payment provider interface
   const session = await provider.createCheckoutSession({
@@ -40,10 +71,40 @@ async function createSubscriptionCheckout({ tenantId, planName }) {
   try {
     await client.query('BEGIN');
 
-    // 5. Lock tenant row to serialize concurrent subscription updates
+    // 5. Check idempotency marker under transaction lock if key provided
+    if (formattedKey) {
+      const txMarker = await client.query(
+        'SELECT id FROM usage_events WHERE tenant_id = $1 AND idempotency_key = $2 LIMIT 1 FOR UPDATE',
+        [tenantId, formattedKey]
+      );
+      if (txMarker.rows.length > 0) {
+        await client.query('COMMIT');
+        const activeSubRes = await db.query(
+          `SELECT s.*, p.name as plan_name
+           FROM subscriptions s
+           JOIN plans p ON s.plan_id = p.id
+           WHERE s.tenant_id = $1 AND s.status = 'active' LIMIT 1`,
+          [tenantId]
+        );
+        const sub = activeSubRes.rows[0];
+        return {
+          success: true,
+          checkout: {
+            provider: provider.name,
+            session_id: `fake_checkout_${idempotencyKey.slice(0, 16)}`,
+            subscription_id: sub ? sub.stripe_subscription_id : session.subscriptionId,
+            plan: sub ? sub.plan_name : targetPlan.name,
+            status: sub ? sub.status : 'active',
+          },
+          idempotent: true,
+        };
+      }
+    }
+
+    // 6. Lock tenant row to serialize concurrent subscription updates
     await client.query('SELECT id FROM tenants WHERE id = $1 FOR UPDATE', [tenantId]);
 
-    // 6. Check if tenant already has an active subscription
+    // 7. Check if tenant already has an active subscription
     const existingSubRes = await client.query(
       "SELECT id FROM subscriptions WHERE tenant_id = $1 AND status = 'active' LIMIT 1 FOR UPDATE",
       [tenantId]
@@ -103,6 +164,15 @@ async function createSubscriptionCheckout({ tenantId, planName }) {
       [tenantId, subscriptionRow.id]
     );
 
+    // 8. Record idempotency marker if key was provided
+    if (formattedKey) {
+      await client.query(
+        `INSERT INTO usage_events (tenant_id, idempotency_key, usage_type, quantity, input_tokens, cached_tokens, output_tokens, reasoning_tokens, cost_cents)
+         VALUES ($1, $2, 'CHECKOUT_EVENT', 0, 0, 0, 0, 0, 0)`,
+        [tenantId, formattedKey]
+      );
+    }
+
     await client.query('COMMIT');
 
     return {
@@ -117,6 +187,28 @@ async function createSubscriptionCheckout({ tenantId, planName }) {
     };
   } catch (error) {
     await client.query('ROLLBACK');
+    // Handle unique constraint 23505 on formattedKey for concurrent duplicate checkout requests
+    if (error.code === '23505' && formattedKey) {
+      const activeSubRes = await db.query(
+        `SELECT s.*, p.name as plan_name
+         FROM subscriptions s
+         JOIN plans p ON s.plan_id = p.id
+         WHERE s.tenant_id = $1 AND s.status = 'active' LIMIT 1`,
+        [tenantId]
+      );
+      const sub = activeSubRes.rows[0];
+      return {
+        success: true,
+        checkout: {
+          provider: provider.name,
+          session_id: `fake_checkout_${idempotencyKey.slice(0, 16)}`,
+          subscription_id: sub ? sub.stripe_subscription_id : session.subscriptionId,
+          plan: sub ? sub.plan_name : targetPlan.name,
+          status: sub ? sub.status : 'active',
+        },
+        idempotent: true,
+      };
+    }
     throw error;
   } finally {
     client.release();

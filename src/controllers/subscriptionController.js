@@ -16,10 +16,14 @@ async function handleCheckout(req, res, next) {
       });
     }
 
+    const rawIdempotencyKey = req.get('Idempotency-Key') || req.headers['idempotency-key'];
+    const idempotencyKey = rawIdempotencyKey && typeof rawIdempotencyKey === 'string' ? rawIdempotencyKey.trim() : null;
+
     const tenant = await getDemoTenant();
     const result = await createSubscriptionCheckout({
       tenantId: tenant.id,
       planName: plan_name.trim(),
+      idempotencyKey,
     });
 
     return res.status(200).json(result);
